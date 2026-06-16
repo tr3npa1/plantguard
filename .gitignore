@@ -1,0 +1,27 @@
+# Data folders
+data/raw/
+data/train/
+data/val/
+data/test/
+
+# Model files
+models/
+*.pth
+*.pt
+*.onnx
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Environment / secrets
+.env
+kaggle.json
+access_token
+
+# Notebooks checkpoints
+.ipynb_checkpoints/
+
+# OS files
+.DS_Store
+Thumbs.db
