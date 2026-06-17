@@ -1,0 +1,47 @@
+project:
+  name: plantguard
+  seed: 42
+
+data:
+  train_dir: data/train
+  val_dir: data/val
+  test_dir: data/test
+  image_size: 256
+  batch_size: 32
+  num_workers: 2
+  num_classes: 38
+  mean: [0.4665524959564209, 0.48931649327278137, 0.4102632701396942]
+  std: [0.19912923872470856, 0.174818754196167, 0.21729066967964172]
+
+model:
+  # Supported models:
+  # - efficientnet_b0
+  # - efficientnet_b3
+  name: efficientnet_b3
+  pretrained: true
+
+training:
+  epochs: 10
+  learning_rate: 0.0001
+  weight_decay: 0.0001
+  optimizer: adamw
+  device: auto
+
+  # Supported losses:
+  # - cross_entropy
+  # - weighted_cross_entropy
+  # - focal_loss
+  loss: cross_entropy
+
+  # Used only when loss is focal_loss.
+  focal_gamma: 2.0
+
+  # Used for weighted_cross_entropy and optionally focal_loss later.
+  class_weighting: inverse_frequency
+
+checkpoint:
+  save_dir: models
+
+mlflow:
+  experiment_name: PlantGuard
+  run_name: efficientnet_b3_cross_entropy

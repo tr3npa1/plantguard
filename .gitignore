@@ -6,6 +6,7 @@ data/test/
 
 # Model files
 models/
+model/
 *.pth
 *.pt
 *.onnx
@@ -25,3 +26,8 @@ access_token
 # OS files
 .DS_Store
 Thumbs.db
+
+# MLflow experiment logs
+mlruns/
+mlartifacts/
+mlflow.db
