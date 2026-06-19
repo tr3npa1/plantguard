@@ -75,33 +75,54 @@ def build_model(model_name, num_classes, pretrained=True):
     """
     Build and return the image classification model.
 
+    Supported models:
+        - efficientnet_b0: lightweight EfficientNet baseline
+        - efficientnet_b3: higher-capacity EfficientNet candidate
+        - resnet50: standard CNN baseline for comparison
+
     Args:
-        model_name: Name of the model architecture.
-        num_classes: Number of output classes.
-        pretrained: Whether to use ImageNet-pretrained weights.
+        model_name: Name of the model architecture from config.yaml.
+        num_classes: Number of disease classes.
+        pretrained: Whether to initialize the backbone with ImageNet weights.
 
     Returns:
-        PyTorch model with a replaced classifier head.
+        PyTorch model with its final classification layer replaced for
+        PlantGuard's number of classes.
     """
     if model_name == "efficientnet_b0":
         weights = models.EfficientNet_B0_Weights.DEFAULT if pretrained else None
         model = models.efficientnet_b0(weights=weights)
 
+        # EfficientNet stores its final classifier inside model.classifier.
         in_features = model.classifier[1].in_features
         model.classifier[1] = nn.Linear(in_features, num_classes)
-        
+
         return model
-    
+
     if model_name == "efficientnet_b3":
         weights = models.EfficientNet_B3_Weights.DEFAULT if pretrained else None
         model = models.efficientnet_b3(weights=weights)
 
+        # EfficientNet-B3 uses the same classifier structure as B0.
         in_features = model.classifier[1].in_features
         model.classifier[1] = nn.Linear(in_features, num_classes)
 
         return model
-    
-    raise ValueError(f"Unsupported model name: {model_name}")
+
+    if model_name == "resnet50":
+        weights = models.ResNet50_Weights.DEFAULT if pretrained else None
+        model = models.resnet50(weights=weights)
+
+        # ResNet stores its final classification layer as model.fc.
+        in_features = model.fc.in_features
+        model.fc = nn.Linear(in_features, num_classes)
+
+        return model
+
+    raise ValueError(
+        f"Unsupported model name: {model_name}. "
+        "Choose from: efficientnet_b0, efficientnet_b3, resnet50."
+    )
 
 
 def create_optimizer(model, optimizer_name, learning_rate, weight_decay):
@@ -237,13 +258,13 @@ def create_loss_function(config, train_dataset, num_classes, device):
             device=device,
         )
 
-        print("Using Weighted CrossEntropyLoss with weight: {class_weights}")
+        print(f"Using Weighted CrossEntropyLoss with weight: {class_weights}")
         return nn.CrossEntropyLoss(weight = class_weights)
     
     if loss_name == "focal_loss":
         gamma = config["training"]["focal_gamma"]
 
-        print("Using FocalLoss with gamma: {gamma}.")
+        print(f"Using FocalLoss with gamma: {gamma}.")
         return FocalLoss(gamma=gamma)
     
     raise ValueError(f"Unsupported loss function: {loss_name}")

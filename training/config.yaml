@@ -17,7 +17,8 @@ model:
   # Supported models:
   # - efficientnet_b0
   # - efficientnet_b3
-  name: efficientnet_b3
+  # - resnet50
+  name: resnet50
   pretrained: true
 
 training:
@@ -31,7 +32,7 @@ training:
   # - cross_entropy
   # - weighted_cross_entropy
   # - focal_loss
-  loss: cross_entropy
+  loss: weighted_cross_entropy
 
   # Used only when loss is focal_loss.
   focal_gamma: 2.0
@@ -44,4 +45,4 @@ checkpoint:
 
 mlflow:
   experiment_name: PlantGuard
-  run_name: efficientnet_b3_cross_entropy
+  run_name: resnet50_weighted_cross_entropy
