@@ -20,6 +20,8 @@ PLANTDOC_DIR = RAW_DIR / "plantdoc"
 PLANTDOC_ZIP_PATH = RAW_DIR / "plantdoc.zip"
 PLANTDOC_TEMP_DIR = RAW_DIR / "plantdoc_temp"
 PLANTDOC_URL = "https://github.com/pratikkayal/PlantDoc-Dataset/archive/refs/heads/master.zip"
+PLANTWILD_DIR = RAW_DIR / "plantwild_v2"
+PLANTWILD_HF_REPO = "uqtwei2/PlantWild"
 
 TRAIN_RATIO = 0.7
 VAL_RATIO = 0.15
@@ -384,6 +386,117 @@ def prepare_plantvillage(force=False):
     create_split(dataset_root, force=force)
 
 
+def download_plantwild(force=False):
+    """
+    Download PlantWild_v2 using Hugging Face Hub.
+
+    PlantWild_v2 is used for Stage C expanded-label training.
+
+    The dataset is saved to:
+        data/raw/plantwild_v2/
+
+    Notes:
+        This downloads the Hugging Face dataset repository. After download,
+        we still inspect the folder structure to locate the actual PlantWild_v2
+        image folders and labels.
+    """
+    RAW_DIR.mkdir(parents=True, exist_ok=True)
+    if PLANTWILD_DIR.exists() and not force:
+        print(f"PlantWild_v2 already exists at {PLANTWILD_DIR}")
+        print("Use --force to remove and re-download it.")
+        return
+    
+    if force and PLANTWILD_DIR.exists():
+        print(f"Removing existing PlantWild_v2 folder: {PLANTWILD_DIR}")
+        shutil.rmtree(PLANTWILD_DIR)
+
+    print("\nDownloading PlantWild_v2 dataset...")
+    print(f"Source Hugging Face repo: {PLANTWILD_HF_REPO}")
+    print(f"Destination: {PLANTWILD_DIR}")
+
+    try:
+        from huggingface_hub import snapshot_download
+    except ImportError as error:
+        raise ImportError(
+            "huggingface_hub is required to download PlantWild_v2.\n"
+            "Install it with:\n"
+            "pip install huggingface_hub"
+        ) from error
+    
+    snapshot_download(
+        repo_id=PLANTWILD_HF_REPO,
+        repo_type="dataset",
+        local_dir=PLANTWILD_DIR,
+    )
+
+    print("\nPlantWild_v2 download complete.")
+    print(f"Saved to: {PLANTWILD_DIR}")
+
+def inspect_plantwild():
+    """
+    Inspect PlantWild_v2 folder structure.
+
+    This prints:
+        -top-level files/folders
+        -possible class folders
+        -rough image counts
+
+    We use this before writing the dataloader because PlantWild_v2
+    may be folder-based, CSV-based, or packed inside nested folders.
+    """
+    if not PLANTWILD_DIR.exists():
+        print(f"PlantWild_v2 folder does not exist: {PLANTWILD_DIR}")
+        print("Run: python data/download.py --dataset plantwild")
+        return
+
+    image_extensions = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+
+    print(f"\nPlantWild_v2 root: {PLANTWILD_DIR}")
+
+    print("\nTop-level contents:")
+    for item in sorted(PLANTWILD_DIR.iterdir()):
+        print(f"- {item.name}")
+
+    print("\nSearching for image files...")
+    image_paths = [
+        path
+        for path in PLANTWILD_DIR.rglob("")
+        if path.is_file() and path.suffix.lower() in image_extensions
+    ]
+
+    print(f"Total image files found: {len(image_paths)}")
+
+    print("\nPossible CSV/metadata files:")
+    metadata_files = [
+        path
+        for path in PLANTWILD_DIR.rglob("")
+        if path.is_file() and path.suffix.lower() in {".csv", ".json", ".txt"}
+    ]
+
+    for path in metadata_files[:50]:
+        print(f"- {path.relative_to(PLANTWILD_DIR)}")
+
+    if len(metadata_files) > 50:
+        print(f"... and {len(metadata_files) - 50} more metadata files")
+
+    print("\nImmediate subfolders:")
+    subfolders = [
+        path
+        for path in PLANTWILD_DIR.iterdir()
+        if path.is_dir()
+    ]
+
+    for folder in sorted(subfolders):
+        folder_image_count = len(
+            [
+                path
+                for path in folder.rglob("*")
+                if path.is_file() and path.suffix.lower() in image_extensions
+            ]
+        )
+        print(f"- {folder.name}: {folder_image_count} images")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Download and prepare PlantGuard datasets."
@@ -393,7 +506,7 @@ def main():
         "--dataset",
         type=str,
         required=True,
-        choices=["plantvillage", "plantdoc"],
+        choices=["plantvillage", "plantdoc", "plantwild"],
         help="Which dataset to download or prepare.",
     )
 
@@ -411,6 +524,10 @@ def main():
     elif args.dataset == "plantdoc":
         download_plantdoc(force=args.force)
         inspect_plantdoc()
+
+    elif args.dataset == "plantwild":
+        download_plantwild(force=args.force)
+        inspect_plantwild()
 
 
 if __name__ == "__main__":

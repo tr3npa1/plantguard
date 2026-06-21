@@ -1,0 +1,116 @@
+plantwild_label,image_count,mapping_status,mapped_label,notes
+apple_black_rot,82,existing_plantguard_label,Apple___Black_rot,"Exact disease match (Apple black rot, Botryosphaeria obtusa)."
+apple_mosaic_virus,89,new_label,apple_mosaic_virus,"Apple mosaic virus has no counterpart among PlantVillage's 4 apple classes (scab, black rot, cedar-apple rust, healthy)."
+apple_rust,139,existing_plantguard_label,Apple___Cedar_apple_rust,"""Apple rust"" is the common shorthand for cedar-apple rust (Gymnosporangium juniperi-virginianae), the disease PlantVillage's class targets - confirmed via disease-ID research. Note: visually similar Gymnosporangium rusts (cedar-hawthorn, cedar-quince) exist; verify a few images if precision matters."
+apple_scab,258,existing_plantguard_label,Apple___Apple_scab,"Exact disease match (Apple scab, Venturia inaequalis)."
+banana_anthracnose,71,new_label,banana_anthracnose,No banana species in PlantVillage at all.
+banana_black_leaf_streak,167,new_label,banana_black_leaf_streak,Black Sigatoka/black leaf streak - no banana in PlantVillage.
+banana_bunchy_top,157,new_label,banana_bunchy_top,No banana in PlantVillage.
+banana_cigar_end_rot,60,new_label,banana_cigar_end_rot,No banana in PlantVillage.
+banana_cordana_leaf_spot,55,new_label,banana_cordana_leaf_spot,No banana in PlantVillage.
+banana_panama_disease,63,new_label,banana_panama_disease,Panama disease/Fusarium wilt of banana - no banana in PlantVillage.
+basil_downy_mildew,63,new_label,basil_downy_mildew,No basil in PlantVillage.
+bean_halo_blight,56,new_label,bean_halo_blight,"No bean species in PlantVillage (Soybean is a separate, distinct PV crop label)."
+bean_mosaic_virus,57,new_label,bean_mosaic_virus,No bean in PlantVillage.
+bean_rust,115,new_label,bean_rust,No bean in PlantVillage.
+bell_pepper_bacterial_spot,76,existing_plantguard_label,"Pepper,_bell___Bacterial_spot","Same crop (bell pepper) and same disease (Xanthomonas bacterial spot) as PlantVillage's ""Pepper,_bell___Bacterial_spot""; only naming convention differs."
+bell_pepper_blossom_end_rot,112,new_label,bell_pepper_blossom_end_rot,"Blossom end rot is a physiological calcium-deficiency disorder, not a pathogen disease, and is not one of PlantVillage's 2 pepper classes."
+bell_pepper_frogeye_leaf_spot,31,new_label,bell_pepper_frogeye_leaf_spot,"Frogeye leaf spot not among PlantVillage's pepper classes (Bacterial_spot, healthy only)."
+bell_pepper_powdery_mildew,28,new_label,bell_pepper_powdery_mildew,Powdery mildew not among PlantVillage's pepper classes.
+blueberry_anthracnose,42,new_label,blueberry_anthracnose,"PlantVillage has no blueberry disease class, only Blueberry___healthy."
+blueberry_botrytis_blight,36,new_label,blueberry_botrytis_blight,No blueberry disease classes in PlantVillage.
+blueberry_mummy_berry,46,new_label,blueberry_mummy_berry,No blueberry disease classes in PlantVillage.
+blueberry_rust,44,new_label,blueberry_rust,No blueberry disease classes in PlantVillage.
+blueberry_scorch,43,new_label,blueberry_scorch,No blueberry disease classes in PlantVillage.
+broccoli_alternaria_leaf_spot,58,new_label,broccoli_alternaria_leaf_spot,No broccoli in PlantVillage.
+broccoli_downy_mildew,36,new_label,broccoli_downy_mildew,No broccoli in PlantVillage.
+broccoli_ring_spot,16,new_label,broccoli_ring_spot,No broccoli in PlantVillage.
+cabbage_alternaria_leaf_spot,61,new_label,cabbage_alternaria_leaf_spot,No cabbage in PlantVillage.
+cabbage_black_rot,131,new_label,cabbage_black_rot,No cabbage in PlantVillage.
+cabbage_downy_mildew,84,new_label,cabbage_downy_mildew,No cabbage in PlantVillage.
+carrot_alternaria_leaf_blight,60,new_label,carrot_alternaria_leaf_blight,No carrot in PlantVillage.
+carrot_cavity_spot,72,new_label,carrot_cavity_spot,No carrot in PlantVillage.
+carrot_cercospora_leaf_blight,19,new_label,carrot_cercospora_leaf_blight,No carrot in PlantVillage.
+cauliflower_alternaria_leaf_spot,54,new_label,cauliflower_alternaria_leaf_spot,No cauliflower in PlantVillage.
+cauliflower_bacterial_soft_rot,36,new_label,cauliflower_bacterial_soft_rot,No cauliflower in PlantVillage.
+celery_anthracnose,29,new_label,celery_anthracnose,No celery in PlantVillage.
+celery_early_blight,36,new_label,celery_early_blight,No celery in PlantVillage.
+cherry_leaf_spot,106,new_label,cherry_leaf_spot,"Cherry leaf spot (Blumeriella jaapii) is a different disease from PlantVillage's only other cherry class, Powdery_mildew; not a match."
+cherry_powdery_mildew,33,existing_plantguard_label,Cherry_(including_sour)___Powdery_mildew,Exact disease + crop match.
+citrus_canker,389,new_label,citrus_canker,"Citrus canker (Xanthomonas citri) is a DIFFERENT disease from PlantVillage's only citrus class, Huanglongbing/citrus greening - different pathogen entirely, do not conflate."
+citrus_greening_disease,134,existing_plantguard_label,Orange___Haunglongbing_(Citrus_greening),"Citrus greening = Huanglongbing = HLB, same disease as PlantVillage's ""Orange___Haunglongbing_(Citrus_greening)"". Note crop-label granularity: PV specifically used Orange; PlantWild's in-the-wild images may include other citrus species."
+coffee_berry_blotch,118,new_label,coffee_berry_blotch,No coffee in PlantVillage.
+coffee_black_rot,7,new_label,coffee_black_rot,No coffee in PlantVillage.
+coffee_brown_eye_spot,20,new_label,coffee_brown_eye_spot,No coffee in PlantVillage.
+coffee_leaf_rust,159,new_label,coffee_leaf_rust,No coffee in PlantVillage.
+corn_gray_leaf_spot,107,existing_plantguard_label,Corn_(maize)___Cercospora_leaf_spot Gray_leaf_spot,"Gray leaf spot = Cercospora leaf spot of corn, the exact same disease as PlantVillage's combined class name."
+corn_northern_leaf_blight,130,existing_plantguard_label,Corn_(maize)___Northern_Leaf_Blight,"Exact disease match (Northern corn leaf blight, Exserohilum turcicum)."
+corn_rust,177,existing_plantguard_label,Corn_(maize)___Common_rust_,"""Corn rust"" used unqualified conventionally defaults to common rust (Puccinia sorghi) - confirmed via research - matching PlantVillage's ""Common_rust_"" class. Caveat: a visually similar but distinct disease, southern rust (Puccinia polysora), is not separately represented in either dataset, so verify a sample of images if precision matters."
+corn_smut,202,new_label,corn_smut,"Corn smut (Ustilago maydis) is not one of PlantVillage's 4 corn classes (gray leaf spot, common rust, NLB, healthy)."
+cucumber_angular_leaf_spot,183,new_label,cucumber_angular_leaf_spot,No cucumber in PlantVillage.
+cucumber_bacterial_wilt,108,new_label,cucumber_bacterial_wilt,No cucumber in PlantVillage.
+cucumber_powdery_mildew,187,new_label,cucumber_powdery_mildew,No cucumber in PlantVillage.
+eggplant_cercospora_leaf_spot,60,new_label,eggplant_cercospora_leaf_spot,No eggplant in PlantVillage.
+eggplant_phomopsis_fruit_rot,44,new_label,eggplant_phomopsis_fruit_rot,No eggplant in PlantVillage.
+eggplant_phytophthora_blight,35,new_label,eggplant_phytophthora_blight,No eggplant in PlantVillage.
+garlic_leaf_blight,92,new_label,garlic_leaf_blight,No garlic in PlantVillage.
+garlic_rust,106,new_label,garlic_rust,No garlic in PlantVillage.
+ginger_leaf_spot,24,new_label,ginger_leaf_spot,No ginger in PlantVillage.
+ginger_sheath_blight,69,new_label,ginger_sheath_blight,No ginger in PlantVillage.
+grape_black_rot,122,existing_plantguard_label,Grape___Black_rot,Exact disease + crop match.
+grape_downy_mildew,280,new_label,grape_downy_mildew,"Grape downy mildew (Plasmopara viticola) is not among PlantVillage's 4 grape classes (Black_rot, Esca/Black_Measles, Leaf_blight/Isariopsis, healthy) - a distinct disease."
+grape_leaf_spot,91,new_label,grape_leaf_spot,"Likely the same disease as PlantVillage's ""Leaf_blight_(Isariopsis_Leaf_Spot)"" (Pseudocercospora vitis, historically called Isariopsis leaf spot) - PlantWild's v1 class list was explicitly built from PlantVillage's categories, supporting this. However, ""grape leaf spot"" is a generic name and a separate, newer disease (Alternaria leaf spot of grapevine) also exists - recommend a manual image check before finalizing."
+grapevine_leafroll_disease,71,new_label,grapevine_leafroll_disease,Grapevine leafroll disease (viral) is not one of PlantVillage's 4 grape classes.
+lettuce_downy_mildew,84,new_label,lettuce_downy_mildew,No lettuce in PlantVillage.
+lettuce_mosaic_virus,39,new_label,lettuce_mosaic_virus,No lettuce in PlantVillage.
+maple_tar_spot,114,new_label,maple_tar_spot,No maple in PlantVillage.
+peach_anthracnose,13,new_label,peach_anthracnose,"Peach anthracnose not in PlantVillage's peach classes (Bacterial_spot, healthy only)."
+peach_brown_rot,173,new_label,peach_brown_rot,Peach brown rot not in PlantVillage's peach classes.
+peach_leaf_curl,182,new_label,peach_leaf_curl,Peach leaf curl not in PlantVillage's peach classes.
+peach_rust,8,new_label,peach_rust,Peach rust not in PlantVillage's peach classes.
+peach_scab,78,new_label,peach_scab,Peach scab not in PlantVillage's peach classes.
+plum_bacterial_spot,16,new_label,plum_bacterial_spot,No plum in PlantVillage.
+plum_brown_rot,81,new_label,plum_brown_rot,No plum in PlantVillage.
+plum_pocket_disease,57,new_label,plum_pocket_disease,No plum in PlantVillage.
+plum_pox_virus,33,new_label,plum_pox_virus,No plum in PlantVillage.
+plum_rust,34,new_label,plum_rust,No plum in PlantVillage.
+potato_early_blight,126,existing_plantguard_label,Potato___Early_blight,Exact disease + crop match.
+potato_late_blight,117,existing_plantguard_label,Potato___Late_blight,Exact disease + crop match.
+raspberry_fire_blight,34,new_label,raspberry_fire_blight,"PlantVillage has no raspberry disease class, only Raspberry___healthy."
+raspberry_gray_mold,40,new_label,raspberry_gray_mold,No raspberry disease classes in PlantVillage.
+raspberry_leaf_spot,18,new_label,raspberry_leaf_spot,No raspberry disease classes in PlantVillage.
+raspberry_yellow_rust,37,new_label,raspberry_yellow_rust,No raspberry disease classes in PlantVillage.
+rice_blast,84,new_label,rice_blast,No rice in PlantVillage.
+rice_sheath_blight,76,new_label,rice_sheath_blight,No rice in PlantVillage.
+soybean_bacterial_blight,91,new_label,soybean_bacterial_blight,"PlantVillage has no soybean disease class, only Soybean___healthy."
+soybean_brown_spot,71,new_label,soybean_brown_spot,No soybean disease classes in PlantVillage.
+soybean_downy_mildew,153,new_label,soybean_downy_mildew,No soybean disease classes in PlantVillage.
+soybean_frog_eye_leaf_spot,238,new_label,soybean_frog_eye_leaf_spot,No soybean disease classes in PlantVillage.
+soybean_mosaic,117,new_label,soybean_mosaic,No soybean disease classes in PlantVillage.
+soybean_rust,118,new_label,soybean_rust,No soybean disease classes in PlantVillage.
+squash_powdery_mildew,182,existing_plantguard_label,Squash___Powdery_mildew,Exact disease + crop match.
+strawberry_anthracnose,58,new_label,strawberry_anthracnose,"PlantVillage's only 2 strawberry classes are Leaf_scorch and healthy; anthracnose is a different disease, not present."
+strawberry_leaf_scorch,39,existing_plantguard_label,Strawberry___Leaf_scorch,Exact disease + crop match.
+tobacco_blue_mold,60,new_label,tobacco_blue_mold,No tobacco in PlantVillage.
+tobacco_brown_spot,66,new_label,tobacco_brown_spot,No tobacco in PlantVillage.
+tobacco_frogeye_leaf_spot,28,new_label,tobacco_frogeye_leaf_spot,No tobacco in PlantVillage.
+tobacco_mosaic_virus,41,new_label,tobacco_mosaic_virus,"Tobacco mosaic virus is a different crop+virus pairing from PlantVillage's Tomato_mosaic_virus class - PlantVillage has no tobacco crop at all, so this must not be merged with the tomato class."
+tomato_bacterial_leaf_spot,109,existing_plantguard_label,Tomato___Bacterial_spot,"Same disease (Xanthomonas bacterial spot of tomato); PlantVillage's class name omits ""leaf"" but refers to the identical disease."
+tomato_early_blight,187,existing_plantguard_label,Tomato___Early_blight,Exact disease + crop match.
+tomato_late_blight,163,existing_plantguard_label,Tomato___Late_blight,Exact disease + crop match.
+tomato_leaf_mold,155,existing_plantguard_label,Tomato___Leaf_Mold,Exact disease + crop match.
+tomato_mosaic_virus,64,existing_plantguard_label,Tomato___Tomato_mosaic_virus,Exact disease + crop match (ToMV).
+tomato_septoria_leaf_spot,130,existing_plantguard_label,Tomato___Septoria_leaf_spot,Exact disease + crop match.
+tomato_yellow_leaf_curl_virus,93,existing_plantguard_label,Tomato___Tomato_Yellow_Leaf_Curl_Virus,Exact disease + crop match (TYLCV).
+wheat_bacterial_leaf_streak_(black_chaff),117,new_label,wheat_bacterial_leaf_streak_(black_chaff),No wheat in PlantVillage.
+wheat_head_scab,318,new_label,wheat_head_scab,No wheat in PlantVillage.
+wheat_leaf_rust,133,new_label,wheat_leaf_rust,No wheat in PlantVillage.
+wheat_loose_smut,215,new_label,wheat_loose_smut,No wheat in PlantVillage.
+wheat_powdery_mildew,271,new_label,wheat_powdery_mildew,No wheat in PlantVillage.
+wheat_septoria_blotch,232,new_label,wheat_septoria_blotch,No wheat in PlantVillage.
+wheat_stem_rust,148,new_label,wheat_stem_rust,No wheat in PlantVillage.
+wheat_stripe_rust,358,new_label,wheat_stripe_rust,No wheat in PlantVillage.
+zucchini_bacterial_wilt,70,new_label,zucchini_bacterial_wilt,No zucchini-specific or bacterial wilt class in PlantVillage.
+zucchini_downy_mildew,44,new_label,zucchini_downy_mildew,No zucchini-specific class in PlantVillage.
+zucchini_powdery_mildew,213,new_label,zucchini_powdery_mildew,"Same disease (powdery mildew) as PlantVillage's ""Squash___Powdery_mildew"", and zucchini (Cucurbita pepo) is a type of squash - but PlantWild_v2 itself treats ""squash"" (class 89) and ""zucchini"" (this class) as separate species/classes, while PlantVillage does not distinguish them. Recommend a human decision on whether to fold this into Squash___Powdery_mildew or keep separate."
+zucchini_yellow_mosaic_virus,95,new_label,zucchini_yellow_mosaic_virus,Zucchini yellow mosaic virus has no counterpart - PlantVillage's only Squash class is Powdery_mildew.

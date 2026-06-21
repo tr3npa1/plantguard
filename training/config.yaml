@@ -8,7 +8,7 @@ data:
   test_dir: data/test
   image_size: 256
   batch_size: 32
-  num_workers: 2
+  num_workers: 4
   num_classes: 38
   mean: [0.4665524959564209, 0.48931649327278137, 0.4102632701396942]
   std: [0.19912923872470856, 0.174818754196167, 0.21729066967964172]
@@ -46,3 +46,50 @@ checkpoint:
 mlflow:
   experiment_name: PlantGuard
   run_name: resnet50_weighted_cross_entropy
+
+plantdoc_finetuning:
+  experiment_name: PlantGuard_PlantDoc_Finetuning_Extended
+  checkpoint: null   # null = fine-tune all models/*_best_model.pth
+
+  batch_size: 32
+  num_workers: 4
+  val_ratio: 0.2
+
+  head_epochs: 10
+  full_epochs: 40
+
+  lr_head: 0.0001
+  lr_full: 0.00005
+  weight_decay: 0.0001
+  optimizer: adamw
+
+  output_dir: evaluation_results
+  finetuned_model_dir: models/plantdoc_finetuned
+
+plantwild_training:
+  experiment_name: PlantGuard_PlantWild_Expanded
+  checkpoint: null
+
+  batch_size: 32
+  num_workers: 4
+
+  plantwild_ratio: 0.80
+  plantdoc_ratio: 0.12
+  plantvillage_ratio: 0.08
+
+  plantwild_score_weight: 0.80
+  plantdoc_score_weight: 0.12
+  plantvillage_score_weight: 0.08
+
+  plantdoc_val_ratio: 0.2
+
+  head_epochs: 7
+  full_epochs: 33
+
+  lr_head: 0.0001
+  lr_full: 0.00003
+  weight_decay: 0.0001
+  optimizer: adamw
+
+  save_dir: models/plantwild_expanded
+  output_dir: evaluation_results/plantwild_training
