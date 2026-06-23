@@ -22,6 +22,9 @@ PLANTDOC_TEMP_DIR = RAW_DIR / "plantdoc_temp"
 PLANTDOC_URL = "https://github.com/pratikkayal/PlantDoc-Dataset/archive/refs/heads/master.zip"
 PLANTWILD_DIR = RAW_DIR / "plantwild_v2"
 PLANTWILD_HF_REPO = "uqtwei2/PlantWild"
+FIELDPLANT_DIR = RAW_DIR / "fieldplant"
+FIELDPLANT_KAGGLE_DATASET = "manhhoangvan/fieldplant"
+
 
 TRAIN_RATIO = 0.7
 VAL_RATIO = 0.15
@@ -41,15 +44,8 @@ def run_command(command):
 
     result = subprocess.run(
         command,
-        capture_output=True,
         text=True,
     )
-
-    if result.stdout:
-        print(result.stdout)
-
-    if result.stderr:
-        print(result.stderr)
 
     if result.returncode != 0:
         raise RuntimeError("Command failed")
@@ -460,7 +456,7 @@ def inspect_plantwild():
     print("\nSearching for image files...")
     image_paths = [
         path
-        for path in PLANTWILD_DIR.rglob("")
+        for path in PLANTWILD_DIR.rglob("*")
         if path.is_file() and path.suffix.lower() in image_extensions
     ]
 
@@ -469,7 +465,7 @@ def inspect_plantwild():
     print("\nPossible CSV/metadata files:")
     metadata_files = [
         path
-        for path in PLANTWILD_DIR.rglob("")
+        for path in PLANTWILD_DIR.rglob("*")
         if path.is_file() and path.suffix.lower() in {".csv", ".json", ".txt"}
     ]
 
@@ -497,6 +493,130 @@ def inspect_plantwild():
         print(f"- {folder.name}: {folder_image_count} images")
 
 
+def download_fieldplant(force=False):
+    """
+    Download the FieldPlant external dataset using the Kaggle API.
+
+    FieldPlant is used only as a final external evaluation dataset.
+    It should not be mixed into PlantVillage, PlantDoc, or PlantWild training.
+
+    The downloaded/extracted dataset is stored at:
+        data/raw/fieldplant/
+    """
+    RAW_DIR.mkdir(parents=True, exist_ok=True)
+
+    if FIELDPLANT_DIR.exists() and not force:
+        print(f"FieldPlant already exists at: {FIELDPLANT_DIR}")
+        print("Use --force to remove and re-download it.")
+        return
+
+    if force and FIELDPLANT_DIR.exists():
+        print(f"Removing existing FieldPlant folder: {FIELDPLANT_DIR}")
+        shutil.rmtree(FIELDPLANT_DIR)
+
+    FIELDPLANT_DIR.mkdir(parents=True, exist_ok=True)
+
+    print("\nDownloading FieldPlant dataset.")
+    print(f"Source Kaggle dataset: {FIELDPLANT_KAGGLE_DATASET}")
+    print(f"Destination: {FIELDPLANT_DIR}")
+
+    command = [
+        "kaggle",
+        "datasets",
+        "download",
+        "-d",
+        FIELDPLANT_KAGGLE_DATASET,
+        "-p",
+        str(FIELDPLANT_DIR),
+        "--unzip",
+    ]
+
+    run_command(command)
+
+    print("\nFieldPlant download complete.")
+    print(f"Saved to: {FIELDPLANT_DIR}")
+
+
+def inspect_fieldplant():
+    """
+    Inspect FieldPlant folder structure.
+
+    This prints:
+        - top-level files/folders
+        - total image count
+        - possible metadata/annotation files
+        - immediate subfolder image counts
+
+    We inspect first because FieldPlant may be classification-style,
+    detection-style, or annotation-file based.
+    """
+    if not FIELDPLANT_DIR.exists():
+        print(f"FieldPlant folder does not exist: {FIELDPLANT_DIR}")
+        print("Run: python data/download.py --dataset fieldplant")
+        return
+    
+    image_extensions = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+    
+    print(f"\nFieldPlant root: {FIELDPLANT_DIR}")
+
+    print("\nTop-level contents:")
+    for item in sorted(FIELDPLANT_DIR.iterdir()):
+        print(f"- {item.name}")
+
+    print("\nSearching for image files...")
+    image_paths = [
+        path
+        for path in FIELDPLANT_DIR.rglob("*")
+        if path.is_file() and path.suffix.lower() in image_extensions
+    ]
+
+    print(f"Total image files found: {len(image_paths)}")
+
+    print("\nPossible annotation/metadata files:")
+    metadata_files = [
+        path
+        for path in FIELDPLANT_DIR.rglob("*")
+        if path.is_file()
+        and path.suffix.lower() in {".csv", ".json", ".txt", ".xml", ".yaml", ".yml"}
+    ]
+
+    for path in metadata_files[:80]:
+        print(f"- {path.relative_to(FIELDPLANT_DIR)}")
+
+    if len(metadata_files) > 80:
+        print(f"... and {len(metadata_files) - 80} more metadata files")
+
+    print("\nImmediate subfolders:")
+    subfolders = [
+        path
+        for path in FIELDPLANT_DIR.iterdir()
+        if path.is_dir()
+    ]
+
+    for folder in sorted(subfolders):
+        folder_image_count = len(
+            [
+                path
+                for path in folder.rglob("*")
+                if path.is_file() and path.suffix.lower() in image_extensions
+            ]
+        )
+        metadata_count = len(
+            [
+                path
+                for path in folder.rglob("*")
+                if path.is_file()
+                and path.suffix.lower() in {".csv", ".json", ".txt", ".xml", ".yaml", ".yml"}
+            ]
+        )
+
+        print(
+            f"- {folder.name}: "
+            f"{folder_image_count} images, "
+            f"{metadata_count} metadata/annotation files"
+        )
+    
+
 def main():
     parser = argparse.ArgumentParser(
         description="Download and prepare PlantGuard datasets."
@@ -506,7 +626,7 @@ def main():
         "--dataset",
         type=str,
         required=True,
-        choices=["plantvillage", "plantdoc", "plantwild"],
+        choices=["plantvillage", "plantdoc", "plantwild", "fieldplant"],
         help="Which dataset to download or prepare.",
     )
 
@@ -528,6 +648,10 @@ def main():
     elif args.dataset == "plantwild":
         download_plantwild(force=args.force)
         inspect_plantwild()
+
+    elif args.dataset == "fieldplant":
+        download_fieldplant(force=args.force)
+        inspect_fieldplant()
 
 
 if __name__ == "__main__":

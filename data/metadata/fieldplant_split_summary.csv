@@ -1,0 +1,16 @@
+category,count
+total_images,5156
+kept_compatible_images,1332
+missing_label_file,0
+empty_label_file,0
+mixed_classes,189
+invalid_class_id,0
+unmapped_class,3635
+class::Corn_(maize)___Cercospora_leaf_spot Gray_leaf_spot,30
+class::Corn_(maize)___Common_rust_,46
+class::Corn_(maize)___Northern_Leaf_Blight,1079
+class::Corn_(maize)___healthy,73
+class::Tomato___Tomato_Yellow_Leaf_Curl_Virus,65
+class::Tomato___Tomato_mosaic_virus,13
+class::Tomato___healthy,13
+class::corn_smut,13

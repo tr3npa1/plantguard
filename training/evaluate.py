@@ -38,18 +38,34 @@ from sklearn.metrics import (
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
-MODELS_DIR = PROJECT_ROOT / "models"
-OUTPUT_DIR = PROJECT_ROOT / "evaluation_results"
+EXPANDED_MODELS_DIR = PROJECT_ROOT / "models" / "plantwild_expanded"
+OUTPUT_DIR = PROJECT_ROOT / "evaluation_results" / "final_expanded_evaluation"
 MLFLOW_DB_PATH = PROJECT_ROOT / "mlflow.db"
 
 EVAL_BATCH_SIZE = 32
 NUM_WORKERS = 4
-MLFLOW_EXPERIMENT_NAME = "PlantGuard_Evaluation"
+EXPECTED_NUM_CLASSES = 132
+
+MLFLOW_EXPERIMENT_NAME = "PlantGuard_Final_Expanded_Evaluation"
+
+FINAL_SCORE_WEIGHTS = {
+    "plantwild_test_macro_f1": 0.50,
+    "plantdoc_test_macro_f1": 0.20,
+    "fieldplant_test_macro_f1": 0.20,
+    "plantvillage_test_macro_f1": 0.10,
+}
 
 sys.path.append(str(PROJECT_ROOT))
 
-from data.dataset import get_dataloaders, get_plantdoc_loader # noqa: E402
-from training.train import build_model
+from data.dataset import ( # noqa: E402
+    get_dataloaders, 
+    get_plantdoc_loader,
+    get_fieldplant_loader,
+    get_plantwild_loader,
+    load_expanded_class_names,
+    validate_expanded_class_order,
+)
+from training.train import build_model # noqa: E402
 
 def get_device():
     """
@@ -89,12 +105,14 @@ def find_checkpoints():
     Returns:
         Sorted list of checkpoint paths.
     """
-    checkpoint_paths = sorted(MODELS_DIR.glob("*_best_model.pth"))
+    checkpoint_paths = sorted(
+        EXPANDED_MODELS_DIR.glob("*_plantwild_expanded_best_model.pth")
+        )
 
     if not checkpoint_paths:
         raise FileNotFoundError(
-            f"No best checkpoints found in {MODELS_DIR}. "
-            "Expected files like efficientnet_b0_cross_entropy_best_model.pth."
+            f"No PlantWild-expanded checkpoints found in {EXPANDED_MODELS_DIR}. "
+            "Expected files like *_plantwild_expanded_best_model.pth."
         )
 
     return checkpoint_paths
@@ -121,37 +139,42 @@ def count_parameters(model):
     return total_parameters, trainable_parameters
 
 
-def load_checkpoint_model(checkpoint_path, num_classes, class_names, device):
+def load_checkpoint_model(checkpoint_path, expanded_class_names, device):
     """
-    Load one checkpoint, rebuild its architecture, and load saved weights.
+    Load one PlantWild-expanded checkpoint.
 
-    Args:
-        checkpoint_path: Path to checkpoint file.
-        num_classes: Number of output classes.
-        class_names: Current PlantVillage class names in label-index order.
-        device: CPU or CUDA device.
-
-    Returns:
-        model: Loaded PyTorch model.
-        config: Saved training config from checkpoint.
-        checkpoint: Full checkpoint dictionary.
+    Expanded checkpoints store model metadata directly in the checkpoint, not
+    inside checkpoint['config'] like the older PlantVillage checkpoints.
     """
     checkpoint = load_checkpoint(checkpoint_path)
 
-    config = checkpoint['config']
-    checkpoint_class_names = checkpoint["class_names"]
+    required_keys = {
+        "model_state_dict",
+        "class_names",
+        "model_name",
+        "loss_name",
+        "run_name",
+    }
 
-    if list(checkpoint_class_names) != list(class_names):
-        raise ValueError(
-            f"Class name mismatch for checkpoint {checkpoint_path.name}. "
-            "Checkpoint class order does not match current dataset class order."
+    missing_keys = required_keys - set(checkpoint.keys())
+
+    if missing_keys:
+        raise KeyError(
+            f"Checkpoint {checkpoint_path.name} missing required keys: "
+            f"{sorted(missing_keys)}"
         )
 
-    model_name = config["model"]["name"]
+    checkpoint_class_names = checkpoint["class_names"]
+
+    if list(checkpoint_class_names) != list(expanded_class_names):
+        raise ValueError(
+            f"Class-name mismatch for checkpoint {checkpoint_path.name}. "
+            "Checkpoint class order does not match expanded class order."
+        )
 
     model = build_model(
-        model_name = model_name,
-        num_classes=num_classes,
+        model_name=checkpoint["model_name"],
+        num_classes=len(expanded_class_names),
         pretrained=False,
     )
 
@@ -159,7 +182,7 @@ def load_checkpoint_model(checkpoint_path, num_classes, class_names, device):
     model = model.to(device)
     model.eval()
 
-    return model, config, checkpoint
+    return model, checkpoint
 
 
 def run_inference(model, dataloader, device):
@@ -210,7 +233,7 @@ def get_present_label_indices(y_true):
     return sorted(np.unique(y_true).astype(int).tolist())
 
 
-def compute_metrics(y_true, y_pred, class_names, average_label_indices):
+def compute_metrics(y_true, y_pred, class_names, average_label_indices=None):
     """
     Compute overall and per-class classification metrics.
 
@@ -228,6 +251,8 @@ def compute_metrics(y_true, y_pred, class_names, average_label_indices):
         cm: Full confusion matrix over all classes.
         prediction_distribution_df: True/predicted count per class.
     """
+    if average_label_indices is None:
+        average_label_indices = get_present_label_indices(y_true)
     all_label_indices = list(range(len(class_names)))
 
     accuracy = accuracy_score(y_true,y_pred)
@@ -274,6 +299,7 @@ def compute_metrics(y_true, y_pred, class_names, average_label_indices):
             "class_index": all_label_indices,
             "class_name": class_names,
             "support": per_class_support,
+            "true_count" : true_counts,
             "precision": per_class_precision,
             "recall": per_class_recall,
             "f1_score": per_class_f1,
@@ -371,7 +397,8 @@ def save_confusion_matrix(cm, class_names, output_path, normalize=False):
         matrix = cm
         title = "Confusion matrix"
 
-    fig, ax = plt.subplots(figsize=(24,20))
+    fig_size = max(24, len(class_names)*0.22)
+    fig, ax = plt.subplots(figsize=(fig_size,fig_size))
 
     image = ax.imshow(matrix, interpolation="nearest")
     ax.figure.colorbar(image, ax=ax)
@@ -385,8 +412,8 @@ def save_confusion_matrix(cm, class_names, output_path, normalize=False):
     ax.set_xticks(tick_marks)
     ax.set_yticks(tick_marks)
 
-    ax.set_xticklabels(class_names, rotation=90, fontsize=6)
-    ax.set_yticklabels(class_names, fontsize=6)
+    ax.set_xticklabels(class_names, rotation=90, fontsize=4)
+    ax.set_yticklabels(class_names, fontsize=4)
 
     fig.tight_layout()
 
@@ -453,9 +480,61 @@ def save_top_confusions(cm, class_names, output_path, top_k=25):
     top_confusions_df.to_csv(output_path, index = False)
 
 
+def get_dataset_sample_paths(dataset):
+    """
+    Extract image paths from dataset.samples when available.
+
+    This supports:
+        PlantDiseaseDataset samples: (path, label)
+        CSVImageDataset samples: (path, label)
+        PlantDocEvaluationDataset samples: (path, label, source_label, mapped_label)
+    """
+    if not hasattr(dataset, "samples"):
+        return ["" for _ in range(len(dataset))]
+
+    paths = []
+
+    for sample in dataset.samples:
+        image_path = sample[0]
+
+        try:
+            paths.append(str(Path(image_path).relative_to(PROJECT_ROOT).as_posix()))
+        except ValueError:
+            paths.append(str(image_path))
+
+    return paths
+
+
+def save_predictions_csv(dataset,y_true,y_pred,class_names,output_path):
+    """
+    Save per-image predictions for error analysis and GradCAM sampling.
+    """
+    image_paths = get_dataset_sample_paths(dataset)
+
+    if len(image_paths) != len(y_true):
+        image_paths = ["" for _ in range(len(y_true))]
+
+    rows = []
+
+    for image_path, true_index, predicted_index in zip(image_paths,y_true,y_pred):
+        rows.append(
+            {
+                "image_path": image_path,
+                "true_class_index": int(true_index),
+                "true_class": class_names[int(true_index)],
+                "predicted_class_index": int(predicted_index),
+                "predicted_class": class_names[int(predicted_index)],
+                "is_correct": bool(int(true_index) == int(predicted_index)),
+            }
+        )
+
+    pd.DataFrame(rows).to_csv(output_path, index=False)
+
+
 def save_dataset_evaluation_artifacts(
     dataset_name,
     run_output_dir,
+    dataset,
     class_names,
     summary_metrics,
     per_class_df,
@@ -463,6 +542,8 @@ def save_dataset_evaluation_artifacts(
     report_present_df,
     cm,
     prediction_distribution_df,
+    y_true,
+    y_pred
 ):
     """
     Save all CSV and PNG artifacts for one dataset evaluation.
@@ -493,6 +574,7 @@ def save_dataset_evaluation_artifacts(
     top_confusions_path = dataset_output_dir / "top_confusions.csv"
     prediction_distribution_path = dataset_output_dir / "prediction_distribution.csv"
     summary_path = dataset_output_dir / "summary_metrics.csv"
+    predictions_path = dataset_output_dir / "predictions.csv"
 
     per_class_df.to_csv(per_class_path, index=False)
     report_all_df.to_csv(report_all_path)
@@ -509,6 +591,14 @@ def save_dataset_evaluation_artifacts(
 
     summary_df = pd.DataFrame([summary_metrics])
     summary_df.to_csv(summary_path, index=False)
+
+    save_predictions_csv(
+        dataset=dataset,
+        y_true=y_true,
+        y_pred=y_pred,
+        class_names=class_names,
+        output_path=predictions_path,
+    )
 
     save_confusion_matrix(
         cm=cm,
@@ -541,6 +631,7 @@ def save_dataset_evaluation_artifacts(
         "top_confusions": top_confusions_path,
         "prediction_distribution": prediction_distribution_path,
         "summary_metrics": summary_path,
+        "predictions" : predictions_path,
     }
 
     return artifact_paths
@@ -549,11 +640,12 @@ def save_dataset_evaluation_artifacts(
 def evaluate_dataset(
     model,
     dataloader,
+    dataset,
     dataset_name,
     class_names,
     output_dir,
-    average_label_indices,
     device,
+    average_label_indices=None,
 ):
     """
     Evaluate one model on one dataset.
@@ -578,7 +670,9 @@ def evaluate_dataset(
         dataloader=dataloader,
         device=device,
     )
-
+    
+    if average_label_indices is None:
+        average_label_indices = get_present_label_indices(y_true)
 
     (
         summary_metrics,
@@ -597,6 +691,7 @@ def evaluate_dataset(
     artifact_paths = save_dataset_evaluation_artifacts(
         dataset_name=dataset_name,
         run_output_dir=output_dir,
+        dataset=dataset,
         class_names=class_names,
         summary_metrics=summary_metrics,
         per_class_df=per_class_df,
@@ -604,8 +699,12 @@ def evaluate_dataset(
         report_present_df=report_present_df,
         cm=cm,
         prediction_distribution_df=prediction_distribution_df,
+        y_true=y_true,
+        y_pred=y_pred
     )
 
+    print(f"{dataset_name} samples:     {summary_metrics['num_samples']}")
+    print(f"{dataset_name} classes:     {summary_metrics['num_present_classes']}")
     print(f"{dataset_name} accuracy: {summary_metrics['accuracy']:.6f}")
     print(f"{dataset_name} macro F1: {summary_metrics['macro_f1']:.6f}")
     print(f"{dataset_name} weighted F1: {summary_metrics['weighted_f1']:.6f}")
@@ -645,162 +744,235 @@ def log_artifacts_to_mlflow(artifact_paths, artifact_root):
         )
 
 
+def get_checkpoint_metric(checkpoint, key):
+    """
+    Safely read numeric checkpoint metric.
+    """
+    value = checkpoint.get(key)
+
+    if value is None:
+        return None
+
+    return float(value)
+
+
+def compute_final_test_score(summary_row):
+    """
+    Compute weighted final test score from macro F1 values.
+    """
+    score = 0.0
+
+    for metric_name, weight in FINAL_SCORE_WEIGHTS.items():
+        score += weight * float(summary_row.get(metric_name, 0.0))
+
+    return score
+
+
+def prepare_final_test_loaders(expanded_class_names):
+    """
+    Create all final test loaders:
+        PlantVillage test
+        PlantDoc held-out test
+        PlantWild test
+        FieldPlant external test
+    """
+    print("\nLoading PlantVillage test loader...")
+    _, _, plantvillage_test_loader, plantvillage_class_names = get_dataloaders(
+        batch_size=EVAL_BATCH_SIZE,
+        num_workers=NUM_WORKERS,
+    )
+
+    validate_expanded_class_order(
+        expanded_class_names=expanded_class_names,
+        original_class_names=plantvillage_class_names,
+    )
+
+    print(f"PlantVillage test samples: {len(plantvillage_test_loader.dataset)}")
+
+    print("\nLoading PlantDoc held-out test loader...")
+    plantdoc_test_loader, plantdoc_test_dataset = get_plantdoc_loader(
+        class_names=expanded_class_names,
+        batch_size=EVAL_BATCH_SIZE,
+        num_workers=NUM_WORKERS,
+        splits=("test",),
+        transform_type="eval",
+        shuffle=False,
+    )
+
+    print(f"PlantDoc test samples: {len(plantdoc_test_dataset)}")
+    print(f"PlantDoc skipped classes: {plantdoc_test_dataset.skipped_classes}")
+
+    print("\nLoading PlantWild test loader...")
+    plantwild_test_loader, plantwild_test_dataset = get_plantwild_loader(
+        split="test",
+        batch_size=EVAL_BATCH_SIZE,
+        num_workers=NUM_WORKERS,
+        transform_type="eval",
+        shuffle=False,
+    )
+
+    print(f"PlantWild test samples: {len(plantwild_test_dataset)}")
+
+    print("\nLoading FieldPlant external test loader...")
+    fieldplant_test_loader, fieldplant_test_dataset = get_fieldplant_loader(
+        batch_size=EVAL_BATCH_SIZE,
+        num_workers=NUM_WORKERS,
+        transform_type="eval",
+        shuffle=False,
+    )
+
+    print(f"FieldPlant test samples: {len(fieldplant_test_dataset)}")
+
+    loaders = {
+        "plantvillage_test": plantvillage_test_loader,
+        "plantdoc_test": plantdoc_test_loader,
+        "plantwild_test": plantwild_test_loader,
+        "fieldplant_test": fieldplant_test_loader,
+    }
+
+    datasets = {
+        "plantvillage_test": plantvillage_test_loader.dataset,
+        "plantdoc_test": plantdoc_test_dataset,
+        "plantwild_test": plantwild_test_dataset,
+        "fieldplant_test": fieldplant_test_dataset,
+    }
+
+    return loaders, datasets
+
+
 def evaluate_checkpoint(
     checkpoint_path,
-    plantvillage_test_loader,
-    plantdoc_loader,
-    plantdoc_dataset,
-    class_names,
+    loaders,
+    datasets,
+    expanded_class_names,
     device,
 ):
     """
-    Evaluate one checkpoint on PlantVillage test and PlantDoc.
-
-    Args:
-        checkpoint_path: Path to best model checkpoint.
-        plantvillage_test_loader: PlantVillage test DataLoader.
-        plantdoc_loader: PlantDoc external DataLoader.
-        plantdoc_dataset: PlantDoc dataset object with metadata.
-        class_names: PlantVillage class names in label-index order.
-        device: CPU or CUDA device.
-
-    Returns:
-        summary_row: Dictionary for final comparison table.
+    Evaluate one PlantWild-expanded checkpoint on all final test datasets.
     """
     print("\n" + "=" * 100)
     print(f"Evaluating checkpoint: {checkpoint_path.name}")
     print("=" * 100)
 
-    model, config, checkpoint = load_checkpoint_model(
+    model, checkpoint = load_checkpoint_model(
         checkpoint_path=checkpoint_path,
-        num_classes=len(class_names),
-        class_names = class_names,
-        device = device,
+        expanded_class_names=expanded_class_names,
+        device=device,
     )
 
-    run_name = config["mlflow"]["run_name"]
-    model_name = config["model"]["name"]
-    loss_name = config["training"]["loss"]
+    run_name = checkpoint["run_name"]
+    model_name = checkpoint["model_name"]
+    loss_name = checkpoint["loss_name"]
 
     total_parameters, trainable_parameters = count_parameters(model)
-
     checkpoint_size_mb = checkpoint_path.stat().st_size / (1024 * 1024)
 
     run_output_dir = OUTPUT_DIR / run_name
     run_output_dir.mkdir(parents=True, exist_ok=True)
 
-    plantvillage_average_labels = list(range(len(class_names)))
+    dataset_results = {}
 
-    plantdoc_true_labels = [
-        label 
-        for _, label, _, _ in plantdoc_dataset.samples
-    ]
-    plantdoc_average_labels = sorted(set(plantdoc_true_labels))
+    for dataset_name, dataloader in loaders.items():
+        dataset = datasets[dataset_name]
 
-    plantvillage_metrics, plantvillage_artifacts = evaluate_dataset(
-        model=model,
-        dataloader=plantvillage_test_loader,
-        dataset_name="plantvillage_test",
-        class_names=class_names,
-        output_dir=run_output_dir,
-        average_label_indices=plantvillage_average_labels,
-        device=device,
-    )
+        metrics, artifact_paths = evaluate_dataset(
+            model=model,
+            dataloader=dataloader,
+            dataset=dataset,
+            dataset_name=dataset_name,
+            class_names=expanded_class_names,
+            output_dir=run_output_dir,
+            device=device,
+            average_label_indices=None,
+        )
 
-    plantdoc_metrics, plantdoc_artifacts = evaluate_dataset(
-        model=model,
-        dataloader=plantdoc_loader,
-        dataset_name="plantdoc",
-        class_names=class_names,
-        output_dir=run_output_dir,
-        average_label_indices=plantdoc_average_labels,
-        device=device,
-    )
-
-    prefixed_plantvillage_metrics = prefix_metrics(
-        plantvillage_metrics,
-        "plantvillage_test",
-    )
-
-    prefixed_plantdoc_metrics = prefix_metrics(
-        plantdoc_metrics,
-        "plantdoc",
-    )
+        dataset_results[dataset_name] = {
+            "metrics": metrics,
+            "artifacts": artifact_paths,
+        }
 
     summary_row = {
         "run_name": run_name,
         "model_name": model_name,
         "loss_name": loss_name,
         "checkpoint": checkpoint_path.name,
-        "checkpoint_size_mb": checkpoint_size_mb,
-        "total_parameters": total_parameters,
-        "trainable_parameters": trainable_parameters,
-        "training_best_val_accuracy": float(checkpoint["best_val_accuracy"]),
-        **prefixed_plantvillage_metrics,
-        **prefixed_plantdoc_metrics,
+        "checkpoint_size_mb": float(checkpoint_size_mb),
+        "total_parameters": int(total_parameters),
+        "trainable_parameters": int(trainable_parameters),
+        "checkpoint_epoch": checkpoint.get("epoch"),
+        "checkpoint_stage": checkpoint.get("stage"),
+        "training_best_selection_score": get_checkpoint_metric(
+            checkpoint,
+            "best_selection_score",
+        ),
+        "training_best_plantwild_macro_f1": get_checkpoint_metric(
+            checkpoint,
+            "best_plantwild_macro_f1",
+        ),
+        "training_best_plantdoc_macro_f1": get_checkpoint_metric(
+            checkpoint,
+            "best_plantdoc_macro_f1",
+        ),
+        "training_best_plantvillage_macro_f1": get_checkpoint_metric(
+            checkpoint,
+            "best_plantvillage_macro_f1",
+        ),
     }
 
-    with mlflow.start_run(run_name=f"{run_name}_evaluation"):
-        mlflow.log_param("training_run_name", run_name)
+    for dataset_name, result in dataset_results.items():
+        summary_row.update(
+            prefix_metrics(
+                result["metrics"],
+                dataset_name,
+            )
+        )
+
+    summary_row["final_test_score"] = compute_final_test_score(summary_row)
+
+    with mlflow.start_run(run_name=f"{run_name}_final_evaluation"):
         mlflow.log_param("source_checkpoint", checkpoint_path.name)
+        mlflow.log_param("run_name", run_name)
         mlflow.log_param("model_name", model_name)
         mlflow.log_param("loss_name", loss_name)
         mlflow.log_param("eval_batch_size", EVAL_BATCH_SIZE)
-        mlflow.log_param("num_classes", len(class_names))
+        mlflow.log_param("num_classes", len(expanded_class_names))
         mlflow.log_param("checkpoint_size_mb", checkpoint_size_mb)
         mlflow.log_param("total_parameters", total_parameters)
         mlflow.log_param("trainable_parameters", trainable_parameters)
-        mlflow.log_param(
-            "training_best_val_accuracy",
-            float(checkpoint["best_val_accuracy"]),
-        )
 
-        mlflow.log_param(
-            "plantdoc_samples",
-            len(plantdoc_dataset),
-        )
-        mlflow.log_param(
-            "plantdoc_skipped_classes",
-            str(plantdoc_dataset.skipped_classes),
-        )
-        mlflow.log_param(
-            "plantdoc_mapped_classes",
-            len(plantdoc_dataset.mapped_class_counts),
-        )
+        for key, value in FINAL_SCORE_WEIGHTS.items():
+            mlflow.log_param(f"final_score_weight.{key}", value)
 
-        mlflow.log_metrics(prefixed_plantvillage_metrics)
-        mlflow.log_metrics(prefixed_plantdoc_metrics)
+        numeric_metrics = {
+            key: value
+            for key, value in summary_row.items()
+            if isinstance(value, (int, float))
+            and value is not None
+        }
 
-        log_artifacts_to_mlflow(
-            artifact_paths=plantvillage_artifacts,
-            artifact_root="evaluation/plantvillage_test",
-        )
+        mlflow.log_metrics(numeric_metrics)
 
-        log_artifacts_to_mlflow(
-            artifact_paths=plantdoc_artifacts,
-            artifact_root="evaluation/plantdoc",
-        )
+        for dataset_name, result in dataset_results.items():
+            log_artifacts_to_mlflow(
+                artifact_paths=result["artifacts"],
+                artifact_root=f"evaluation/{dataset_name}",
+            )
 
     return summary_row
 
 
 def save_final_summary(summary_rows):
     """
-    Save final model comparison CSV.
-
-    Args:
-        summary_rows: List of model evaluation summary dictionaries.
-
-    Returns:
-        summary_df: Final comparison dataframe.
+    Save final expanded model comparison CSV.
     """
     summary_df = pd.DataFrame(summary_rows)
 
     sort_columns = [
-        "plantdoc_macro_f1",
-        "plantdoc_accuracy",
+        "final_test_score",
+        "plantwild_test_macro_f1",
+        "fieldplant_test_macro_f1",
+        "plantdoc_test_macro_f1",
         "plantvillage_test_macro_f1",
-        "plantvillage_test_accuracy",
     ]
 
     existing_sort_columns = [
@@ -808,34 +980,36 @@ def save_final_summary(summary_rows):
         for column in sort_columns
         if column in summary_df.columns
     ]
+
     if existing_sort_columns:
         summary_df = summary_df.sort_values(
             by=existing_sort_columns,
             ascending=False,
         )
-    
+
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    summary_path = OUTPUT_DIR / "model_comparison_summary.csv"
+    summary_path = OUTPUT_DIR / "final_model_comparison_summary.csv"
     summary_df.to_csv(summary_path, index=False)
 
     print("\n" + "=" * 100)
-    print("Final model comparison")
+    print("Final expanded model comparison")
     print("=" * 100)
 
     display_columns = [
         "run_name",
         "model_name",
         "loss_name",
-        "training_best_val_accuracy",
-        "plantvillage_test_accuracy",
+        "final_test_score",
+        "plantwild_test_macro_f1",
+        "plantdoc_test_macro_f1",
+        "fieldplant_test_macro_f1",
         "plantvillage_test_macro_f1",
-        "plantvillage_test_weighted_f1",
-        "plantdoc_accuracy",
-        "plantdoc_macro_f1",
-        "plantdoc_weighted_f1",
-        "checkpoint_size_mb",
-        "total_parameters",
+        "plantwild_test_accuracy",
+        "plantdoc_test_accuracy",
+        "fieldplant_test_accuracy",
+        "plantvillage_test_accuracy",
+        "training_best_selection_score",
     ]
 
     existing_display_columns = [
@@ -847,42 +1021,35 @@ def save_final_summary(summary_rows):
     print(summary_df[existing_display_columns].to_string(index=False))
     print(f"\nSaved final summary to: {summary_path}")
 
-    return summary_df
+    return summary_df, summary_path
 
 
 def main():
     """
-    Run evaluation for all saved best checkpoints.
+    Run final evaluation for all PlantWild-expanded checkpoints.
     """
-
     device = get_device()
     print(f"Using device: {device}")
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    print("\nLoading PlantVillage test loader...")
-    _, _, plantvillage_test_loader, class_names = get_dataloaders(
-        batch_size=EVAL_BATCH_SIZE,
-        num_workers=NUM_WORKERS,
+    expanded_class_names = load_expanded_class_names()
+
+    if len(expanded_class_names) != EXPECTED_NUM_CLASSES:
+        raise RuntimeError(
+            f"Expected {EXPECTED_NUM_CLASSES} classes, "
+            f"found {len(expanded_class_names)}."
+        )
+
+    print(f"Expanded classes: {len(expanded_class_names)}")
+
+    loaders, datasets = prepare_final_test_loaders(
+        expanded_class_names=expanded_class_names,
     )
-
-    print(f"PlantVillage classes: {len(class_names)}")
-    print(f"PlantVillage test samples: {len(plantvillage_test_loader.dataset)}")
-
-    print("\nLoading PlantDoc external evaluation loader...")
-    plantdoc_loader, plantdoc_dataset = get_plantdoc_loader(
-        class_names=class_names,
-        batch_size=EVAL_BATCH_SIZE,
-        num_workers=NUM_WORKERS,
-    )
-
-    print(f"PlantDoc samples: {len(plantdoc_dataset)}")
-    print(f"PlantDoc batches: {len(plantdoc_loader)}")
-    print(f"PlantDoc skipped classes: {plantdoc_dataset.skipped_classes}")
 
     checkpoint_paths = find_checkpoints()
 
-    print("\nFound checkpoints:")
+    print("\nFound PlantWild-expanded checkpoints:")
     for checkpoint_path in checkpoint_paths:
         print(f"- {checkpoint_path.name}")
 
@@ -894,25 +1061,26 @@ def main():
     for checkpoint_path in checkpoint_paths:
         summary_row = evaluate_checkpoint(
             checkpoint_path=checkpoint_path,
-            plantvillage_test_loader=plantvillage_test_loader,
-            plantdoc_loader=plantdoc_loader,
-            plantdoc_dataset=plantdoc_dataset,
-            class_names=class_names,
+            loaders=loaders,
+            datasets=datasets,
+            expanded_class_names=expanded_class_names,
             device=device,
         )
 
         summary_rows.append(summary_row)
 
-    summary_df = save_final_summary(summary_rows)
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
 
-    summary_path = OUTPUT_DIR / "model_comparison_summary.csv"
+    summary_df, summary_path = save_final_summary(summary_rows)
 
-    with mlflow.start_run(run_name="all_models_evaluation_summary"):
+    with mlflow.start_run(run_name="final_expanded_evaluation_summary"):
         mlflow.log_param("num_evaluated_models", len(summary_df))
         mlflow.log_param("eval_batch_size", EVAL_BATCH_SIZE)
-        mlflow.log_param("num_classes", len(class_names))
-        mlflow.log_param("plantdoc_samples", len(plantdoc_dataset))
-        mlflow.log_param("plantdoc_skipped_classes", str(plantdoc_dataset.skipped_classes))
+        mlflow.log_param("num_classes", len(expanded_class_names))
+
+        for key, value in FINAL_SCORE_WEIGHTS.items():
+            mlflow.log_param(f"final_score_weight.{key}", value)
 
         mlflow.log_artifact(
             str(summary_path),

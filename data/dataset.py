@@ -39,9 +39,12 @@ PLANTWILD_TRAIN_CSV = SPLITS_DIR / "plantwild_train.csv"
 PLANTWILD_VAL_CSV = SPLITS_DIR / "plantwild_val.csv"
 PLANTWILD_TEST_CSV = SPLITS_DIR / "plantwild_test.csv"
 
+FIELDPLANT_TEST_CSV = SPLITS_DIR / "fieldplant_test.csv"
+
 IMAGE_SIZE = 256
 BATCH_SIZE = 32
 NUM_WORKERS = 2
+EXPECTED_EXPANDED_NUM_CLASSES = 132
 
 # Dataset-specific normalization values calculated from the training split only.
 DATASET_MEAN = [0.4665524959564209, 0.48931649327278137, 0.4102632701396942]
@@ -323,7 +326,7 @@ class CSVImageDataset(Dataset):
         self.samples = []
 
         for _, row in self.dataframe.iterrows():
-            image_path = PROJECT_ROOT / row["image_path"]
+            image_path = PROJECT_ROOT / str(row["image_path"])
             label = int(row["label_index"])
 
             if not image_path.exists():
@@ -668,9 +671,13 @@ def load_expanded_class_names():
     with EXPANDED_CLASS_NAMES_JSON.open("r", encoding="utf-8") as file:
         class_names = json.load(file)
 
-    if len(class_names) <= 38:
+    if not isinstance(class_names, list):
+        raise TypeError("Expanded class-name JSON must contain a list.")
+
+    if len(class_names) != EXPECTED_EXPANDED_NUM_CLASSES:
         raise RuntimeError(
-            f"Expanded class list looks wrong. Found {len(class_names)} classes."
+            f"Expected {EXPECTED_EXPANDED_NUM_CLASSES} expanded classes, "
+            f"found {len(class_names)}."
         )
 
     return class_names
@@ -770,6 +777,58 @@ def get_plantwild_loader(
         pin_memory=True,
     )
 
+    return loader, dataset
+
+
+def get_fieldplant_dataset(transform_type="eval"):
+    """
+    Create the FieldPlant external test dataset from fieldplant_test.csv.
+
+    FieldPlant is prepared from YOLO annotations into a classification CSV by:
+        python data/prepare_fieldplant.py
+
+    Returns:
+        CSVImageDataset for FieldPlant external evaluation.
+    """
+    train_transforms, eval_trasnforms = get_transforms()
+
+    if transform_type=="train":
+        selected_transform = train_transforms
+    elif transform_type=="eval":
+        selected_transform = eval_trasnforms
+    else:
+        raise ValueError(
+            f"Unsupported transform_type: {transform_type}. "
+            "Choose 'train' or 'eval'."
+        )
+    
+    return CSVImageDataset(
+        csv_path=FIELDPLANT_TEST_CSV,
+        transform=selected_transform,
+    )
+
+
+def get_fieldplant_loader(
+        batch_size=BATCH_SIZE,
+        num_workers=NUM_WORKERS,
+        transform_type="eval",
+        shuffle=False,
+):
+    """
+    Create the FieldPlant external test dataloader.
+
+    Returns:
+        loader: FieldPlant DataLoader.
+        dataset: FieldPlant CSVImageDataset.
+    """
+    dataset=get_fieldplant_dataset(transform_type=transform_type)
+    loader = DataLoader(
+        dataset=dataset,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        num_workers=num_workers,
+        pin_memory=True,
+    )
     return loader, dataset
 
 
@@ -1130,3 +1189,44 @@ if __name__ == "__main__":
         print(f"Metadata: {metadata}")
     else:
         print("\nExpanded PlantWild files not found. Skipping expanded loader smoke test.")
+
+    if FIELDPLANT_TEST_CSV.exists() and EXPANDED_CLASS_NAMES_JSON.exists():
+        print("\n--- FieldPlant external test loader ---")
+
+        expanded_class_names = load_expanded_class_names()
+
+        fieldplant_loader, fieldplant_dataset = get_fieldplant_loader(
+            batch_size=BATCH_SIZE,
+            num_workers=NUM_WORKERS,
+            transform_type="eval",
+            shuffle=False,
+        )
+
+        print(f"FieldPlant samples: {len(fieldplant_dataset)}")
+        print(f"FieldPlant batches: {len(fieldplant_loader)}")
+
+        images, labels = next(iter(fieldplant_loader))
+
+        print(f"FieldPlant image batch shape: {images.shape}")
+        print(f"FieldPlant label batch shape: {labels.shape}")
+        print(f"FieldPlant label min: {labels.min().item()}")
+        print(f"FieldPlant label max: {labels.max().item()}")
+        print(f"FieldPlant first 5 labels: {labels[:5]}")
+
+        first_5_class_names = [
+            expanded_class_names[int(label)]
+            for label in labels[:5]
+        ]
+
+        print(f"FieldPlant first 5 class names: {first_5_class_names}")
+
+        if hasattr(fieldplant_dataset, "dataframe"):
+            print("\nFieldPlant CSV class distribution:")
+            print(
+                fieldplant_dataset.dataframe["class_name"]
+                .value_counts()
+                .sort_index()
+                .to_string()
+            )
+    else:
+        print("\nFieldPlant test CSV or expanded labels not found. Skipping FieldPlant smoke test.")

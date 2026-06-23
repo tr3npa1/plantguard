@@ -1,0 +1,28 @@
+fieldplant_class_id,fieldplant_label,mapping_status,mapped_label,mapping_note
+0,Cassava Bacterial Blight,unmapped,,no_cassava_label_in_plantguard
+1,Cassava Brown Leaf Spot,unmapped,,no_cassava_label_in_plantguard
+2,Cassava Healthy,unmapped,,no_cassava_label_in_plantguard
+3,Cassava Mosaic,unmapped,,no_cassava_label_in_plantguard
+4,Cassava Root Rot,unmapped,,no_cassava_label_in_plantguard
+5,Corn Brown Spots,unmapped,,generic_ambiguous_brown_spot
+6,Corn Charcoal,unmapped,,not_cleanly_mapped_to_current_label_space
+7,Corn Chlorotic Leaf Spot,unmapped,,not_cleanly_mapped_to_current_label_space
+8,Corn Gray leaf spot,mapped,Corn_(maize)___Cercospora_leaf_spot Gray_leaf_spot,direct_gray_leaf_spot_match
+9,Corn Healthy,mapped,Corn_(maize)___healthy,direct_healthy_match
+10,Corn Insects Damages,unmapped,,pest_damage_not_disease_label
+11,Corn Mildew,unmapped,,corn_mildew_not_in_current_label_space
+12,Corn Purple Discoloration,unmapped,,abiotic_or_ambiguous_discoloration
+13,Corn Smut,mapped,corn_smut,direct_expanded_label_match
+14,Corn Streak,unmapped,,not_cleanly_mapped_to_current_label_space
+15,Corn Stripe,unmapped,,not_cleanly_mapped_to_current_label_space
+16,Corn Violet Decoloration,unmapped,,abiotic_or_ambiguous_discoloration
+17,Corn Yellow Spots,unmapped,,generic_ambiguous_yellow_spots
+18,Corn Yellowing,unmapped,,generic_ambiguous_yellowing
+19,Corn leaf blight,mapped,Corn_(maize)___Northern_Leaf_Blight,closest_clean_corn_blight_match
+20,Corn rust leaf,mapped,Corn_(maize)___Common_rust_,direct_rust_match
+21,Tomato Brown Spots,unmapped,,generic_ambiguous_brown_spot
+22,Tomato bacterial wilt,unmapped,,bacterial_wilt_not_same_as_bacterial_spot
+23,Tomato blight leaf,unmapped,,ambiguous_early_or_late_blight
+24,Tomato healthy,mapped,Tomato___healthy,direct_healthy_match
+25,Tomato leaf mosaic virus,mapped,Tomato___Tomato_mosaic_virus,direct_mosaic_virus_match
+26,Tomato leaf yellow virus,mapped,Tomato___Tomato_Yellow_Leaf_Curl_Virus,direct_yellow_leaf_curl_match

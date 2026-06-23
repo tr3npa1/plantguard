@@ -70,8 +70,8 @@ plantwild_training:
   experiment_name: PlantGuard_PlantWild_Expanded
   checkpoint: null
 
-  batch_size: 32
-  num_workers: 4
+  batch_size: 16
+  num_workers: 6
 
   plantwild_ratio: 0.80
   plantdoc_ratio: 0.12
@@ -83,11 +83,11 @@ plantwild_training:
 
   plantdoc_val_ratio: 0.2
 
-  head_epochs: 7
-  full_epochs: 33
+  head_epochs: 10
+  full_epochs: 50
 
-  lr_head: 0.0001
-  lr_full: 0.00003
+  lr_head: 0.0005
+  lr_full: 0.00002
   weight_decay: 0.0001
   optimizer: adamw
 
