@@ -1,26 +1,48 @@
 """
-Evaluation script for the PlantGuard project.
+Final expanded evaluation script for PlantGuard.
 
-This script evaluates all saved best model checkpoints on:
+This script evaluates all PlantWild-expanded checkpoints on four held-out or
+external datasets:
+
 1. PlantVillage test split
-2. PlantDoc external evaluation dataset
+   - Original clean/lab-style PlantVillage test data.
+   - Uses the first 38 labels of the expanded 132-class label space.
 
-For each checkpoint, it:
-- loads the saved checkpoint
-- reads the saved training config
-- rebuilds the correct architecture
-- loads trained weights
-- evaluates on PlantVillage test
-- evaluates on PlantDoc
-- computes overall and per-class metrics
-- saves CSV reports and confusion matrices
-- logs metrics and artifacts to MLflow
+2. PlantDoc test split
+   - External real-world dataset mapped into PlantGuard labels.
+   - Tests robustness after PlantDoc fine-tuning and PlantWild expansion.
+
+3. PlantWild_v2 test split
+   - Main expanded real-world dataset.
+   - Tests the 132-class PlantGuard label space.
+
+4. FieldPlant compatible external test split
+   - Detection-style FieldPlant data converted to image-level classification.
+   - Uses only classes that can be safely mapped into PlantGuard labels.
+
+For each checkpoint, the script:
+    - rebuilds the correct model architecture
+    - loads checkpoint weights
+    - runs inference on all final test datasets
+    - computes accuracy, balanced accuracy, macro F1, and weighted F1
+    - saves per-class metrics, classification reports, confusion matrices,
+      prediction distributions, top confusions, and per-image predictions
+    - logs metrics and artifacts to MLflow
+    - writes a consolidated final model comparison CSV
+
+The final comparison file is saved to:
+
+    evaluation_results/final_expanded_evaluation/final_model_comparison_summary.csv
 """
 
-from pathlib import Path
+from __future__ import annotations
+
+import gc
 import sys
+from pathlib import Path
 
 import matplotlib
+
 matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
@@ -30,13 +52,24 @@ import pandas as pd
 import torch
 from sklearn.metrics import (
     accuracy_score,
-    balanced_accuracy_score,
     classification_report,
     confusion_matrix,
     precision_recall_fscore_support,
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.append(str(PROJECT_ROOT))
+
+from data.dataset import (  # noqa: E402
+    get_dataloaders,
+    get_fieldplant_loader,
+    get_plantdoc_loader,
+    get_plantwild_loader,
+    load_expanded_class_names,
+    validate_expanded_class_order,
+)
+from training.train import build_model  # noqa: E402
+
 
 EXPANDED_MODELS_DIR = PROJECT_ROOT / "models" / "plantwild_expanded"
 OUTPUT_DIR = PROJECT_ROOT / "evaluation_results" / "final_expanded_evaluation"
@@ -55,78 +88,78 @@ FINAL_SCORE_WEIGHTS = {
     "plantvillage_test_macro_f1": 0.10,
 }
 
-sys.path.append(str(PROJECT_ROOT))
+CHECKPOINT_GLOB = "*_plantwild_expanded_best_model.pth"
 
-from data.dataset import ( # noqa: E402
-    get_dataloaders, 
-    get_plantdoc_loader,
-    get_fieldplant_loader,
-    get_plantwild_loader,
-    load_expanded_class_names,
-    validate_expanded_class_order,
-)
-from training.train import build_model # noqa: E402
 
-def get_device():
+def get_device() -> torch.device:
     """
-    Return CUDA if available, otherwise CPU
+    Select the evaluation device.
+
+    Returns:
+        CUDA device when available, otherwise CPU.
     """
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-def load_checkpoint(checkpoint_path):
+def load_checkpoint(checkpoint_path: Path) -> dict:
     """
-    Load a PyTorch checkpoint safely.
+    Load a PyTorch checkpoint across PyTorch versions.
 
     Args:
-        checkpoint_path: Path to checkpoint file.
+        checkpoint_path:
+            Path to a .pth checkpoint file.
 
     Returns:
-        checkpoint dictionary.
+        Loaded checkpoint dictionary.
     """
     try:
         return torch.load(
             checkpoint_path,
-            map_location='cpu',
+            map_location="cpu",
             weights_only=False,
         )
     except TypeError:
         return torch.load(
             checkpoint_path,
-            map_location='cpu',
-
+            map_location="cpu",
         )
-    
 
-def find_checkpoints():
+
+def find_checkpoints() -> list[Path]:
     """
-    Find all best model checkpoints inside the models directory.
+    Find all final PlantWild-expanded best checkpoints.
 
     Returns:
         Sorted list of checkpoint paths.
+
+    Raises:
+        FileNotFoundError:
+            If no matching checkpoints exist.
     """
-    checkpoint_paths = sorted(
-        EXPANDED_MODELS_DIR.glob("*_plantwild_expanded_best_model.pth")
-        )
+    checkpoint_paths = sorted(EXPANDED_MODELS_DIR.glob(CHECKPOINT_GLOB))
 
     if not checkpoint_paths:
         raise FileNotFoundError(
             f"No PlantWild-expanded checkpoints found in {EXPANDED_MODELS_DIR}. "
-            "Expected files like *_plantwild_expanded_best_model.pth."
+            f"Expected files matching: {CHECKPOINT_GLOB}"
         )
 
     return checkpoint_paths
 
 
-def count_parameters(model):
+def count_parameters(model: torch.nn.Module) -> tuple[int, int]:
     """
-    Count total and trainable parameters in a model.
+    Count total and trainable model parameters.
 
     Args:
-        model: PyTorch model.
+        model:
+            PyTorch model.
 
     Returns:
-        total_parameters, trainable_parameters.
+        total_parameters:
+            Total number of parameters.
+        trainable_parameters:
+            Number of parameters with requires_grad=True.
     """
     total_parameters = sum(parameter.numel() for parameter in model.parameters())
 
@@ -139,12 +172,38 @@ def count_parameters(model):
     return total_parameters, trainable_parameters
 
 
-def load_checkpoint_model(checkpoint_path, expanded_class_names, device):
+def load_checkpoint_model(
+    checkpoint_path: Path,
+    expanded_class_names: list[str],
+    device: torch.device,
+) -> tuple[torch.nn.Module, dict]:
     """
     Load one PlantWild-expanded checkpoint.
 
-    Expanded checkpoints store model metadata directly in the checkpoint, not
-    inside checkpoint['config'] like the older PlantVillage checkpoints.
+    Expanded checkpoints store architecture metadata directly in the checkpoint.
+    This differs from earlier 38-class PlantVillage checkpoints, which used a
+    nested config dictionary.
+
+    Args:
+        checkpoint_path:
+            Path to the checkpoint.
+        expanded_class_names:
+            Current 132-class label list.
+        device:
+            Evaluation device.
+
+    Returns:
+        model:
+            Loaded model in eval mode.
+        checkpoint:
+            Raw checkpoint dictionary.
+
+    Raises:
+        KeyError:
+            If checkpoint metadata is incomplete.
+        ValueError:
+            If checkpoint class order does not match the current expanded label
+            order.
     """
     checkpoint = load_checkpoint(checkpoint_path)
 
@@ -160,16 +219,16 @@ def load_checkpoint_model(checkpoint_path, expanded_class_names, device):
 
     if missing_keys:
         raise KeyError(
-            f"Checkpoint {checkpoint_path.name} missing required keys: "
+            f"Checkpoint {checkpoint_path.name} is missing required keys: "
             f"{sorted(missing_keys)}"
         )
 
-    checkpoint_class_names = checkpoint["class_names"]
+    checkpoint_class_names = list(checkpoint["class_names"])
 
-    if list(checkpoint_class_names) != list(expanded_class_names):
+    if checkpoint_class_names != list(expanded_class_names):
         raise ValueError(
             f"Class-name mismatch for checkpoint {checkpoint_path.name}. "
-            "Checkpoint class order does not match expanded class order."
+            "The checkpoint class order does not match the expanded class order."
         )
 
     model = build_model(
@@ -179,24 +238,33 @@ def load_checkpoint_model(checkpoint_path, expanded_class_names, device):
     )
 
     model.load_state_dict(checkpoint["model_state_dict"])
-    model = model.to(device)
+    model.to(device)
     model.eval()
 
     return model, checkpoint
 
 
-def run_inference(model, dataloader, device):
+def run_inference(
+    model: torch.nn.Module,
+    dataloader: torch.utils.data.DataLoader,
+    device: torch.device,
+) -> tuple[np.ndarray, np.ndarray]:
     """
-    Run inference on a full dataloader.
+    Run model inference over a full dataloader.
 
     Args:
-        model: PyTorch model.
-        dataloader: DataLoader returning image-label batches.
-        device: CPU or CUDA device.
+        model:
+            Loaded PyTorch model.
+        dataloader:
+            DataLoader returning image-label batches.
+        device:
+            CPU or CUDA device.
 
     Returns:
-        y_true: Ground-truth labels as numpy array.
-        y_pred: Predicted labels as numpy array.
+        y_true:
+            Ground-truth labels as a NumPy array.
+        y_pred:
+            Predicted labels as a NumPy array.
     """
     all_labels = []
     all_predictions = []
@@ -208,8 +276,8 @@ def run_inference(model, dataloader, device):
             images = images.to(device)
             labels = labels.to(device)
 
-            output = model(images)
-            predictions = output.argmax(dim=1)
+            outputs = model(images)
+            predictions = outputs.argmax(dim=1)
 
             all_labels.extend(labels.cpu().numpy())
             all_predictions.extend(predictions.cpu().numpy())
@@ -220,44 +288,65 @@ def run_inference(model, dataloader, device):
     return y_true, y_pred
 
 
-def get_present_label_indices(y_true):
+def get_present_label_indices(y_true: np.ndarray) -> list[int]:
     """
-    Return sorted label indices that are present in y_true.
+    Return sorted label indices present in the ground-truth labels.
 
     Args:
-        y_true: Ground-truth labels.
+        y_true:
+            Ground-truth label array.
 
     Returns:
-        Sorted list of present label indices.
+        Sorted list of unique class indices appearing in y_true.
     """
     return sorted(np.unique(y_true).astype(int).tolist())
 
 
-def compute_metrics(y_true, y_pred, class_names, average_label_indices=None):
+def compute_metrics(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    class_names: list[str],
+    average_label_indices: list[int] | None = None,
+) -> tuple[dict, pd.DataFrame, pd.DataFrame, pd.DataFrame, np.ndarray, pd.DataFrame]:
     """
-    Compute overall and per-class classification metrics.
+    Compute overall, per-class, and distribution metrics.
+
+    Macro and weighted averages are computed over classes present in the
+    ground-truth labels by default. This is important because some final test
+    datasets use only a subset of the 132-class label space.
 
     Args:
-        y_true: Ground-truth labels.
-        y_pred: Predicted labels.
-        class_names: Full PlantVillage class names in label-index order.
-        average_label_indices: Labels to include in macro/weighted averages.
+        y_true:
+            Ground-truth labels.
+        y_pred:
+            Predicted labels.
+        class_names:
+            Full expanded class names in label-index order.
+        average_label_indices:
+            Label indices included in macro/weighted averages. If None, uses
+            labels present in y_true.
 
     Returns:
-        summary_metrics: Dictionary of overall metrics.
-        per_class_df: Per-class precision/recall/F1/support dataframe.
-        report_all_df: Classification report over all classes.
-        report_present_df: Classification report over present target classes.
-        cm: Full confusion matrix over all classes.
-        prediction_distribution_df: True/predicted count per class.
+        summary_metrics:
+            Overall metrics dictionary.
+        per_class_df:
+            Per-class precision/recall/F1/support dataframe.
+        report_all_df:
+            Classification report over all 132 classes.
+        report_present_df:
+            Classification report over ground-truth-present classes.
+        cm:
+            Full confusion matrix over all 132 classes.
+        prediction_distribution_df:
+            True/predicted count per class.
     """
     if average_label_indices is None:
         average_label_indices = get_present_label_indices(y_true)
+
     all_label_indices = list(range(len(class_names)))
 
-    accuracy = accuracy_score(y_true,y_pred)
-    balanced_accuracy = balanced_accuracy_score(y_true,y_pred)
-    
+    accuracy = accuracy_score(y_true, y_pred)
+
     macro_precision, macro_recall, macro_f1, _ = precision_recall_fscore_support(
         y_true,
         y_pred,
@@ -274,7 +363,7 @@ def compute_metrics(y_true, y_pred, class_names, average_label_indices=None):
         zero_division=0,
     )
 
-    per_class_precision, per_class_recall, per_class_f1, per_class_support =(
+    per_class_precision, per_class_recall, per_class_f1, per_class_support = (
         precision_recall_fscore_support(
             y_true,
             y_pred,
@@ -283,7 +372,7 @@ def compute_metrics(y_true, y_pred, class_names, average_label_indices=None):
             zero_division=0,
         )
     )
-    
+
     true_counts = np.bincount(
         y_true,
         minlength=len(class_names),
@@ -299,7 +388,7 @@ def compute_metrics(y_true, y_pred, class_names, average_label_indices=None):
             "class_index": all_label_indices,
             "class_name": class_names,
             "support": per_class_support,
-            "true_count" : true_counts,
+            "true_count": true_counts,
             "precision": per_class_precision,
             "recall": per_class_recall,
             "f1_score": per_class_f1,
@@ -325,7 +414,7 @@ def compute_metrics(y_true, y_pred, class_names, average_label_indices=None):
     report_present_dict = classification_report(
         y_true,
         y_pred,
-        labels = average_label_indices,
+        labels=average_label_indices,
         target_names=present_class_names,
         output_dict=True,
         zero_division=0,
@@ -337,7 +426,7 @@ def compute_metrics(y_true, y_pred, class_names, average_label_indices=None):
     cm = confusion_matrix(
         y_true,
         y_pred,
-        labels = all_label_indices,
+        labels=all_label_indices,
     )
 
     prediction_distribution_df = pd.DataFrame(
@@ -352,7 +441,11 @@ def compute_metrics(y_true, y_pred, class_names, average_label_indices=None):
 
     summary_metrics = {
         "accuracy": float(accuracy),
-        "balanced_accuracy": float(balanced_accuracy),
+        # Balanced accuracy is equivalent to macro recall over present true
+        # classes in this single-label multiclass setting. Computing it this
+        # way avoids sklearn warnings when the 132-class model predicts labels
+        # that are not present in a smaller dataset's ground truth.
+        "balanced_accuracy": float(macro_recall),
         "macro_precision": float(macro_precision),
         "macro_recall": float(macro_recall),
         "macro_f1": float(macro_f1),
@@ -373,32 +466,40 @@ def compute_metrics(y_true, y_pred, class_names, average_label_indices=None):
     )
 
 
-def save_confusion_matrix(cm, class_names, output_path, normalize=False):
+def save_confusion_matrix(
+    cm: np.ndarray,
+    class_names: list[str],
+    output_path: Path,
+    normalize: bool = False,
+) -> None:
     """
     Save a confusion matrix plot.
 
     Args:
-        cm: Confusion matrix.
-        class_names: Class names in label-index order.
-        output_path: Path where PNG should be saved.
-        normalize: Whether to normalize each row by true-class count.
+        cm:
+            Confusion matrix.
+        class_names:
+            Class names in label-index order.
+        output_path:
+            PNG output path.
+        normalize:
+            If True, normalize each row by true-class count.
     """
     if normalize:
         row_sums = cm.sum(axis=1, keepdims=True)
         matrix = np.divide(
             cm,
             row_sums,
-            out = np.zeros_like(cm,dtype=float),
-            where=row_sums!=0,
+            out=np.zeros_like(cm, dtype=float),
+            where=row_sums != 0,
         )
         title = "Normalized confusion matrix"
-
     else:
         matrix = cm
         title = "Confusion matrix"
 
-    fig_size = max(24, len(class_names)*0.22)
-    fig, ax = plt.subplots(figsize=(fig_size,fig_size))
+    fig_size = max(24, len(class_names) * 0.22)
+    fig, ax = plt.subplots(figsize=(fig_size, fig_size))
 
     image = ax.imshow(matrix, interpolation="nearest")
     ax.figure.colorbar(image, ax=ax)
@@ -416,20 +517,28 @@ def save_confusion_matrix(cm, class_names, output_path, normalize=False):
     ax.set_yticklabels(class_names, fontsize=4)
 
     fig.tight_layout()
-
-    plt.savefig(output_path, dpi=200, bbox_inches="tight")
+    fig.savefig(output_path, dpi=200, bbox_inches="tight")
     plt.close(fig)
 
 
-def save_top_confusions(cm, class_names, output_path, top_k=25):
+def save_top_confusions(
+    cm: np.ndarray,
+    class_names: list[str],
+    output_path: Path,
+    top_k: int = 25,
+) -> None:
     """
-    Save the most common off-diagonal confusions.
+    Save the most common off-diagonal confusion pairs.
 
     Args:
-        cm: Confusion matrix.
-        class_names: Class names in label-index order.
-        output_path: CSV output path.
-        top_k: Number of confusion pairs to save.
+        cm:
+            Full confusion matrix.
+        class_names:
+            Class names in label-index order.
+        output_path:
+            CSV output path.
+        top_k:
+            Number of highest-count confusion pairs to save.
     """
     rows = []
 
@@ -437,16 +546,16 @@ def save_top_confusions(cm, class_names, output_path, top_k=25):
         true_support = int(cm[true_index].sum())
 
         for predicted_index in range(cm.shape[1]):
-            if true_index==predicted_index:
+            if true_index == predicted_index:
                 continue
 
-            count = int(cm[true_index,predicted_index])
+            count = int(cm[true_index, predicted_index])
 
-            if count<=0:
+            if count <= 0:
                 continue
 
             rows.append(
-                 {
+                {
                     "true_class_index": true_index,
                     "true_class": class_names[true_index],
                     "predicted_class_index": predicted_index,
@@ -458,7 +567,7 @@ def save_top_confusions(cm, class_names, output_path, top_k=25):
                     ),
                 }
             )
-    
+
     columns = [
         "true_class_index",
         "true_class",
@@ -473,21 +582,33 @@ def save_top_confusions(cm, class_names, output_path, top_k=25):
 
     if not top_confusions_df.empty:
         top_confusions_df = top_confusions_df.sort_values(
-            by = ["count", "percent_of_true_class"],
+            by=["count", "percent_of_true_class"],
             ascending=False,
         ).head(top_k)
 
-    top_confusions_df.to_csv(output_path, index = False)
+    top_confusions_df.to_csv(output_path, index=False)
 
 
-def get_dataset_sample_paths(dataset):
+def get_dataset_sample_paths(dataset) -> list[str]:
     """
-    Extract image paths from dataset.samples when available.
+    Extract image paths from a dataset when dataset.samples is available.
 
-    This supports:
-        PlantDiseaseDataset samples: (path, label)
-        CSVImageDataset samples: (path, label)
-        PlantDocEvaluationDataset samples: (path, label, source_label, mapped_label)
+    Supported sample tuple formats:
+        PlantDiseaseDataset:
+            (path, label)
+
+        CSVImageDataset:
+            (path, label)
+
+        PlantDocEvaluationDataset:
+            (path, label, source_label, mapped_label)
+
+    Args:
+        dataset:
+            Dataset object used by the evaluated dataloader.
+
+    Returns:
+        List of image paths aligned with dataloader order.
     """
     if not hasattr(dataset, "samples"):
         return ["" for _ in range(len(dataset))]
@@ -495,19 +616,37 @@ def get_dataset_sample_paths(dataset):
     paths = []
 
     for sample in dataset.samples:
-        image_path = sample[0]
+        image_path = Path(sample[0])
 
         try:
-            paths.append(str(Path(image_path).relative_to(PROJECT_ROOT).as_posix()))
+            paths.append(str(image_path.relative_to(PROJECT_ROOT).as_posix()))
         except ValueError:
             paths.append(str(image_path))
 
     return paths
 
 
-def save_predictions_csv(dataset,y_true,y_pred,class_names,output_path):
+def save_predictions_csv(
+    dataset,
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    class_names: list[str],
+    output_path: Path,
+) -> None:
     """
     Save per-image predictions for error analysis and GradCAM sampling.
+
+    Args:
+        dataset:
+            Dataset used during evaluation.
+        y_true:
+            Ground-truth labels.
+        y_pred:
+            Predicted labels.
+        class_names:
+            Expanded class names in label-index order.
+        output_path:
+            CSV output path.
     """
     image_paths = get_dataset_sample_paths(dataset)
 
@@ -516,7 +655,7 @@ def save_predictions_csv(dataset,y_true,y_pred,class_names,output_path):
 
     rows = []
 
-    for image_path, true_index, predicted_index in zip(image_paths,y_true,y_pred):
+    for image_path, true_index, predicted_index in zip(image_paths, y_true, y_pred):
         rows.append(
             {
                 "image_path": image_path,
@@ -532,136 +671,163 @@ def save_predictions_csv(dataset,y_true,y_pred,class_names,output_path):
 
 
 def save_dataset_evaluation_artifacts(
-    dataset_name,
-    run_output_dir,
+    dataset_name: str,
+    run_output_dir: Path,
     dataset,
-    class_names,
-    summary_metrics,
-    per_class_df,
-    report_all_df,
-    report_present_df,
-    cm,
-    prediction_distribution_df,
-    y_true,
-    y_pred
-):
+    class_names: list[str],
+    summary_metrics: dict,
+    per_class_df: pd.DataFrame,
+    report_all_df: pd.DataFrame,
+    report_present_df: pd.DataFrame,
+    cm: np.ndarray,
+    prediction_distribution_df: pd.DataFrame,
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+) -> dict[str, Path]:
     """
     Save all CSV and PNG artifacts for one dataset evaluation.
 
     Args:
-        dataset_name: Name such as plantvillage_test or plantdoc.
-        run_output_dir: Output directory for this model run.
-        class_names: Class names in label-index order.
-        summary_metrics: Overall metrics dictionary.
-        per_class_df: Per-class metrics dataframe.
-        report_all_df: Classification report over all 38 classes.
-        report_present_df: Classification report over present true classes.
-        cm: Full confusion matrix.
-        prediction_distribution_df: True/predicted count dataframe.
+        dataset_name:
+            Name such as plantwild_test or fieldplant_test.
+        run_output_dir:
+            Output directory for this model run.
+        dataset:
+            Dataset object used by the dataloader.
+        class_names:
+            Expanded class names in label-index order.
+        summary_metrics:
+            Overall metrics dictionary.
+        per_class_df:
+            Per-class precision/recall/F1 dataframe.
+        report_all_df:
+            Classification report over all 132 classes.
+        report_present_df:
+            Classification report over classes present in y_true.
+        cm:
+            Full 132-class confusion matrix.
+        prediction_distribution_df:
+            True/predicted count dataframe.
+        y_true:
+            Ground-truth labels.
+        y_pred:
+            Predicted labels.
 
     Returns:
-        artifact_paths: Dictionary of artifact names to paths.
+        Mapping from artifact name to saved file path.
     """
     dataset_output_dir = run_output_dir / dataset_name
     dataset_output_dir.mkdir(parents=True, exist_ok=True)
 
-    per_class_path = dataset_output_dir / "per_class_metrics.csv"
-    report_all_path = dataset_output_dir / "classification_report_all_classes.csv"
-    report_present_path = dataset_output_dir / "classification_report_present_classes.csv"
-    cm_csv_path = dataset_output_dir / "confusion_matrix.csv"
-    cm_png_path = dataset_output_dir / "confusion_matrix.png"
-    cm_norm_png_path = dataset_output_dir / "confusion_matrix_normalized.png"
-    top_confusions_path = dataset_output_dir / "top_confusions.csv"
-    prediction_distribution_path = dataset_output_dir / "prediction_distribution.csv"
-    summary_path = dataset_output_dir / "summary_metrics.csv"
-    predictions_path = dataset_output_dir / "predictions.csv"
+    artifact_paths = {
+        "per_class_metrics": dataset_output_dir / "per_class_metrics.csv",
+        "classification_report_all_classes": (
+            dataset_output_dir / "classification_report_all_classes.csv"
+        ),
+        "classification_report_present_classes": (
+            dataset_output_dir / "classification_report_present_classes.csv"
+        ),
+        "confusion_matrix_csv": dataset_output_dir / "confusion_matrix.csv",
+        "confusion_matrix_png": dataset_output_dir / "confusion_matrix.png",
+        "confusion_matrix_normalized_png": (
+            dataset_output_dir / "confusion_matrix_normalized.png"
+        ),
+        "top_confusions": dataset_output_dir / "top_confusions.csv",
+        "prediction_distribution": dataset_output_dir / "prediction_distribution.csv",
+        "summary_metrics": dataset_output_dir / "summary_metrics.csv",
+        "predictions": dataset_output_dir / "predictions.csv",
+    }
 
-    per_class_df.to_csv(per_class_path, index=False)
-    report_all_df.to_csv(report_all_path)
-    report_present_df.to_csv(report_present_path)
+    per_class_df.to_csv(artifact_paths["per_class_metrics"], index=False)
+    report_all_df.to_csv(artifact_paths["classification_report_all_classes"])
+    report_present_df.to_csv(artifact_paths["classification_report_present_classes"])
 
     cm_df = pd.DataFrame(
         cm,
-        index = class_names,
-        columns = class_names,
+        index=class_names,
+        columns=class_names,
     )
-    cm_df.to_csv(cm_csv_path)
+    cm_df.to_csv(artifact_paths["confusion_matrix_csv"])
 
-    prediction_distribution_df.to_csv(prediction_distribution_path, index = False)
+    prediction_distribution_df.to_csv(
+        artifact_paths["prediction_distribution"],
+        index=False,
+    )
 
-    summary_df = pd.DataFrame([summary_metrics])
-    summary_df.to_csv(summary_path, index=False)
+    pd.DataFrame([summary_metrics]).to_csv(
+        artifact_paths["summary_metrics"],
+        index=False,
+    )
 
     save_predictions_csv(
         dataset=dataset,
         y_true=y_true,
         y_pred=y_pred,
         class_names=class_names,
-        output_path=predictions_path,
+        output_path=artifact_paths["predictions"],
     )
 
     save_confusion_matrix(
         cm=cm,
-        class_names = class_names,
-        output_path=cm_png_path,
+        class_names=class_names,
+        output_path=artifact_paths["confusion_matrix_png"],
         normalize=False,
     )
 
     save_confusion_matrix(
         cm=cm,
         class_names=class_names,
-        output_path=cm_norm_png_path,
+        output_path=artifact_paths["confusion_matrix_normalized_png"],
         normalize=True,
     )
 
     save_top_confusions(
         cm=cm,
         class_names=class_names,
-        output_path=top_confusions_path,
+        output_path=artifact_paths["top_confusions"],
         top_k=25,
     )
-
-    artifact_paths = {
-        "per_class_metrics": per_class_path,
-        "classification_report_all_classes": report_all_path,
-        "classification_report_present_classes": report_present_path,
-        "confusion_matrix_csv": cm_csv_path,
-        "confusion_matrix_png": cm_png_path,
-        "confusion_matrix_normalized_png": cm_norm_png_path,
-        "top_confusions": top_confusions_path,
-        "prediction_distribution": prediction_distribution_path,
-        "summary_metrics": summary_path,
-        "predictions" : predictions_path,
-    }
 
     return artifact_paths
 
 
 def evaluate_dataset(
-    model,
-    dataloader,
+    model: torch.nn.Module,
+    dataloader: torch.utils.data.DataLoader,
     dataset,
-    dataset_name,
-    class_names,
-    output_dir,
-    device,
-    average_label_indices=None,
-):
+    dataset_name: str,
+    class_names: list[str],
+    output_dir: Path,
+    device: torch.device,
+    average_label_indices: list[int] | None = None,
+) -> tuple[dict, dict[str, Path]]:
     """
     Evaluate one model on one dataset.
 
     Args:
-        model: PyTorch model.
-        dataloader: Dataset DataLoader.
-        dataset_name: Name used for prefixes and output folders.
-        class_names: Full PlantVillage class names in label-index order.
-        output_dir: Output directory for this model run.
-        average_label_indices: Labels to include in macro/weighted averages.
-        device: CPU or CUDA device.
+        model:
+            Loaded PyTorch model.
+        dataloader:
+            Dataset dataloader.
+        dataset:
+            Dataset object used by the dataloader.
+        dataset_name:
+            Name used for metric prefixes and output folders.
+        class_names:
+            Expanded class names in label-index order.
+        output_dir:
+            Output directory for this model run.
+        device:
+            CPU or CUDA device.
+        average_label_indices:
+            Labels included in macro/weighted averages. If None, labels present
+            in y_true are used.
 
     Returns:
-        summary_metrics: Overall metrics dictionary.
-        artifact_paths: Saved artifact paths.
+        summary_metrics:
+            Overall metric dictionary.
+        artifact_paths:
+            Saved artifact path dictionary.
     """
     print(f"\nEvaluating dataset: {dataset_name}")
 
@@ -670,7 +836,7 @@ def evaluate_dataset(
         dataloader=dataloader,
         device=device,
     )
-    
+
     if average_label_indices is None:
         average_label_indices = get_present_label_indices(y_true)
 
@@ -700,25 +866,27 @@ def evaluate_dataset(
         cm=cm,
         prediction_distribution_df=prediction_distribution_df,
         y_true=y_true,
-        y_pred=y_pred
+        y_pred=y_pred,
     )
 
     print(f"{dataset_name} samples:     {summary_metrics['num_samples']}")
     print(f"{dataset_name} classes:     {summary_metrics['num_present_classes']}")
-    print(f"{dataset_name} accuracy: {summary_metrics['accuracy']:.6f}")
-    print(f"{dataset_name} macro F1: {summary_metrics['macro_f1']:.6f}")
+    print(f"{dataset_name} accuracy:    {summary_metrics['accuracy']:.6f}")
+    print(f"{dataset_name} macro F1:    {summary_metrics['macro_f1']:.6f}")
     print(f"{dataset_name} weighted F1: {summary_metrics['weighted_f1']:.6f}")
 
     return summary_metrics, artifact_paths
 
 
-def prefix_metrics(metrics, prefix):
+def prefix_metrics(metrics: dict, prefix: str) -> dict:
     """
-    Prefix metric keys for MLflow and summary CSV.
+    Prefix metric keys for MLflow and final summary CSV.
 
     Args:
-        metrics: Metrics dictionary.
-        prefix: Prefix such as plantvillage_test or plantdoc.
+        metrics:
+            Metric dictionary.
+        prefix:
+            Prefix such as plantwild_test or fieldplant_test.
 
     Returns:
         New dictionary with prefixed metric names.
@@ -729,13 +897,18 @@ def prefix_metrics(metrics, prefix):
     }
 
 
-def log_artifacts_to_mlflow(artifact_paths, artifact_root):
+def log_artifacts_to_mlflow(
+    artifact_paths: dict[str, Path],
+    artifact_root: str,
+) -> None:
     """
-    Log a dictionary of artifact files to MLflow.
+    Log saved artifact files to MLflow.
 
     Args:
-        artifact_paths: Dictionary of artifact names to paths.
-        artifact_root: MLflow artifact folder.
+        artifact_paths:
+            Mapping from artifact name to file path.
+        artifact_root:
+            MLflow artifact folder.
     """
     for artifact_path in artifact_paths.values():
         mlflow.log_artifact(
@@ -744,9 +917,18 @@ def log_artifacts_to_mlflow(artifact_paths, artifact_root):
         )
 
 
-def get_checkpoint_metric(checkpoint, key):
+def get_checkpoint_metric(checkpoint: dict, key: str) -> float | None:
     """
-    Safely read numeric checkpoint metric.
+    Safely read a numeric metric from a checkpoint.
+
+    Args:
+        checkpoint:
+            Checkpoint dictionary.
+        key:
+            Metric key.
+
+    Returns:
+        Float value or None when missing.
     """
     value = checkpoint.get(key)
 
@@ -756,9 +938,19 @@ def get_checkpoint_metric(checkpoint, key):
     return float(value)
 
 
-def compute_final_test_score(summary_row):
+def compute_final_test_score(summary_row: dict) -> float:
     """
-    Compute weighted final test score from macro F1 values.
+    Compute the weighted final test score from dataset macro F1 metrics.
+
+    The score is a model-selection helper, not a universal metric. It weights
+    PlantWild most heavily because it is the main expanded real-world dataset.
+
+    Args:
+        summary_row:
+            Row containing prefixed dataset metrics.
+
+    Returns:
+        Weighted final score.
     """
     score = 0.0
 
@@ -768,13 +960,21 @@ def compute_final_test_score(summary_row):
     return score
 
 
-def prepare_final_test_loaders(expanded_class_names):
+def prepare_final_test_loaders(
+    expanded_class_names: list[str],
+) -> tuple[dict, dict]:
     """
-    Create all final test loaders:
-        PlantVillage test
-        PlantDoc held-out test
-        PlantWild test
-        FieldPlant external test
+    Create all final test dataloaders.
+
+    Args:
+        expanded_class_names:
+            Current 132-class label list.
+
+    Returns:
+        loaders:
+            Mapping from dataset name to dataloader.
+        datasets:
+            Mapping from dataset name to dataset object.
     """
     print("\nLoading PlantVillage test loader...")
     _, _, plantvillage_test_loader, plantvillage_class_names = get_dataloaders(
@@ -841,14 +1041,29 @@ def prepare_final_test_loaders(expanded_class_names):
 
 
 def evaluate_checkpoint(
-    checkpoint_path,
-    loaders,
-    datasets,
-    expanded_class_names,
-    device,
-):
+    checkpoint_path: Path,
+    loaders: dict,
+    datasets: dict,
+    expanded_class_names: list[str],
+    device: torch.device,
+) -> dict:
     """
     Evaluate one PlantWild-expanded checkpoint on all final test datasets.
+
+    Args:
+        checkpoint_path:
+            Checkpoint to evaluate.
+        loaders:
+            Dataset-name to dataloader mapping.
+        datasets:
+            Dataset-name to dataset-object mapping.
+        expanded_class_names:
+            132-class label list.
+        device:
+            Evaluation device.
+
+    Returns:
+        Summary row for final_model_comparison_summary.csv.
     """
     print("\n" + "=" * 100)
     print(f"Evaluating checkpoint: {checkpoint_path.name}")
@@ -922,8 +1137,8 @@ def evaluate_checkpoint(
     for dataset_name, result in dataset_results.items():
         summary_row.update(
             prefix_metrics(
-                result["metrics"],
-                dataset_name,
+                metrics=result["metrics"],
+                prefix=dataset_name,
             )
         )
 
@@ -946,8 +1161,7 @@ def evaluate_checkpoint(
         numeric_metrics = {
             key: value
             for key, value in summary_row.items()
-            if isinstance(value, (int, float))
-            and value is not None
+            if isinstance(value, (int, float)) and value is not None
         }
 
         mlflow.log_metrics(numeric_metrics)
@@ -958,12 +1172,30 @@ def evaluate_checkpoint(
                 artifact_root=f"evaluation/{dataset_name}",
             )
 
+    del model
+    gc.collect()
+
+    if device.type == "cuda":
+        torch.cuda.empty_cache()
+
     return summary_row
 
 
-def save_final_summary(summary_rows):
+def save_final_summary(
+    summary_rows: list[dict],
+) -> tuple[pd.DataFrame, Path]:
     """
-    Save final expanded model comparison CSV.
+    Save and print the final expanded model comparison table.
+
+    Args:
+        summary_rows:
+            One summary row per evaluated checkpoint.
+
+    Returns:
+        summary_df:
+            Sorted summary dataframe.
+        summary_path:
+            Path to the saved final comparison CSV.
     """
     summary_df = pd.DataFrame(summary_rows)
 
@@ -1024,7 +1256,7 @@ def save_final_summary(summary_rows):
     return summary_df, summary_path
 
 
-def main():
+def main() -> None:
     """
     Run final evaluation for all PlantWild-expanded checkpoints.
     """
@@ -1068,9 +1300,6 @@ def main():
         )
 
         summary_rows.append(summary_row)
-
-        if device.type == "cuda":
-            torch.cuda.empty_cache()
 
     summary_df, summary_path = save_final_summary(summary_rows)
 

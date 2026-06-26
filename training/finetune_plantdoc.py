@@ -1,30 +1,33 @@
 """
 Fine-tune PlantVillage-trained PlantGuard checkpoints on PlantDoc.
 
-This script performs PlantDoc domain adaptation.
+This script performs Stage B domain adaptation for PlantGuard.
 
 Pipeline:
-1. Load one or more existing PlantVillage-trained best checkpoints from models/.
-2. Build the same architecture used by the checkpoint.
-3. Load checkpoint weights.
-4. Fine-tune on PlantDoc train-adapt split.
-5. Validate on PlantDoc val-adapt split.
-6. Save the best PlantDoc-adapted checkpoint by validation macro F1.
-7. Log parameters and metrics to MLflow.
-8. Save a summary CSV under evaluation_results/.
+    1. Load one or more PlantVillage-trained best checkpoints from models/.
+    2. Rebuild the original checkpoint architecture.
+    3. Load PlantVillage-trained weights.
+    4. Fine-tune on the PlantDoc train-adapt split.
+    5. Validate on the PlantDoc val-adapt split.
+    6. Save the best PlantDoc-adapted checkpoint by validation macro F1.
+    7. Log parameters and metrics to MLflow.
+    8. Save a fine-tuning summary CSV.
 
 Important:
-    This script does NOT perform final testing.
+    This script does not perform final testing.
 
-Final testing should be done separately on:
-    - PlantDoc test split
-    - PlantVillage test split
+Final testing is handled separately by training/evaluate.py on:
+    - PlantVillage test
+    - PlantDoc held-out test
+    - PlantWild_v2 test
+    - FieldPlant compatible external test
 
-That separate evaluation tells us:
-    - whether PlantDoc fine-tuning improved real-world performance
-    - whether PlantDoc fine-tuning caused catastrophic forgetting on PlantVillage
+The purpose of this script is domain adaptation, not final model selection.
 """
 
+from __future__ import annotations
+
+import gc
 import sys
 from pathlib import Path
 
@@ -35,18 +38,11 @@ import torch.nn as nn
 import torch.optim as optim
 from sklearn.metrics import f1_score
 
-# ---------------------------------------------------------------------
-# Project setup
-# ---------------------------------------------------------------------
-
-# Resolve project root:
-# training/finetune_plantdoc.py -> training/ -> project root
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-
-# Allow imports like `from data.dataset import ...`
 sys.path.append(str(PROJECT_ROOT))
 
 from data.dataset import get_plantdoc_finetune_loaders  # noqa: E402
+from training.evaluate import count_parameters, load_checkpoint  # noqa: E402
 from training.train import (  # noqa: E402
     CONFIG_PATH,
     FocalLoss,
@@ -57,28 +53,24 @@ from training.train import (  # noqa: E402
     set_seed,
     train_one_epoch,
 )
-from training.evaluate import count_parameters, load_checkpoint  # noqa: E402
 
 
 MODELS_DIR = PROJECT_ROOT / "models"
 MLFLOW_DB_PATH = PROJECT_ROOT / "mlflow.db"
 
+SOURCE_CHECKPOINT_GLOB = "*_best_model.pth"
 
-# ---------------------------------------------------------------------
-# Small path/config helpers
-# ---------------------------------------------------------------------
 
-def resolve_project_path(path_value):
+def resolve_project_path(path_value: str | Path) -> Path:
     """
-    Convert a config path into an absolute Path.
+    Resolve a path that may be absolute or project-relative.
 
     Args:
         path_value:
-            Path string from config. It can be relative to the project root
-            or already absolute.
+            Path string from config or a Path object.
 
     Returns:
-        Absolute pathlib.Path object.
+        Absolute Path object.
     """
     path = Path(path_value)
 
@@ -88,47 +80,56 @@ def resolve_project_path(path_value):
     return PROJECT_ROOT / path
 
 
-def discover_checkpoints(checkpoint_from_config):
+def discover_checkpoints(checkpoint_from_config: str | None) -> list[Path]:
     """
-    Find checkpoint files to fine-tune.
+    Find PlantVillage checkpoints to fine-tune.
 
     Args:
         checkpoint_from_config:
-            If None, all original models/*_best_model.pth checkpoints are used.
-            If provided, only that checkpoint is used.
+            If provided, only this checkpoint is used. If None or empty, all
+            root-level models/*_best_model.pth checkpoints are used.
 
     Returns:
         Sorted list of checkpoint paths.
     """
-    if checkpoint_from_config is not None:
-        return [resolve_project_path(checkpoint_from_config)]
+    if checkpoint_from_config:
+        checkpoint_path = resolve_project_path(checkpoint_from_config)
+
+        if not checkpoint_path.exists():
+            raise FileNotFoundError(f"Configured checkpoint not found: {checkpoint_path}")
+
+        return [checkpoint_path]
 
     checkpoint_paths = sorted(
         checkpoint_path
-        for checkpoint_path in MODELS_DIR.glob("*_best_model.pth")
+        for checkpoint_path in MODELS_DIR.glob(SOURCE_CHECKPOINT_GLOB)
         if checkpoint_path.parent == MODELS_DIR
         and "plantdoc_finetuned" not in checkpoint_path.name
+        and "plantwild_expanded" not in checkpoint_path.name
     )
 
     return checkpoint_paths
 
 
-def get_checkpoint_identity(checkpoint):
+def get_checkpoint_identity(checkpoint: dict) -> tuple[str, str, str]:
     """
-    Read model identity information from a saved PlantVillage checkpoint.
+    Read run/model/loss identity from a PlantVillage checkpoint.
 
     Args:
         checkpoint:
-            Loaded checkpoint dictionary.
+            Loaded PlantVillage checkpoint dictionary.
 
     Returns:
         run_name:
-            MLflow run name used during original PlantVillage training.
+            Original MLflow run name.
         model_name:
             Architecture name, e.g. efficientnet_b3.
         loss_name:
-            Loss function name, e.g. weighted_cross_entropy.
+            Training loss name, e.g. weighted_cross_entropy.
     """
+    if "config" not in checkpoint:
+        raise KeyError("Checkpoint is missing config metadata.")
+
     source_config = checkpoint["config"]
 
     run_name = source_config["mlflow"]["run_name"]
@@ -138,7 +139,10 @@ def get_checkpoint_identity(checkpoint):
     return run_name, model_name, loss_name
 
 
-def get_checkpoint_focal_gamma(checkpoint, default=2.0):
+def get_checkpoint_focal_gamma(
+    checkpoint: dict,
+    default: float = 2.0,
+) -> float:
     """
     Read focal-loss gamma from the source checkpoint config.
 
@@ -146,10 +150,10 @@ def get_checkpoint_focal_gamma(checkpoint, default=2.0):
         checkpoint:
             Loaded checkpoint dictionary.
         default:
-            Fallback gamma if the checkpoint config does not contain it.
+            Fallback gamma if missing from config.
 
     Returns:
-        Focal-loss gamma as float.
+        Focal-loss gamma.
     """
     source_config = checkpoint.get("config", {})
     training_config = source_config.get("training", {})
@@ -157,56 +161,61 @@ def get_checkpoint_focal_gamma(checkpoint, default=2.0):
     return float(training_config.get("focal_gamma", default))
 
 
-# ---------------------------------------------------------------------
-# Loss helpers
-# ---------------------------------------------------------------------
-
-def get_subset_labels(subset):
+def get_subset_labels(subset: torch.utils.data.Subset) -> list[int]:
     """
     Extract labels from a torch.utils.data.Subset.
 
-    PlantDoc fine-tuning uses a Subset of PlantDocEvaluationDataset.
-    The base dataset stores samples as:
-        (image_path, label, plantdoc_class_name, plantvillage_class_name)
+    PlantDoc fine-tuning uses a Subset of PlantDocEvaluationDataset. The base
+    dataset stores samples as:
+
+        (image_path, label, plantdoc_class_name, mapped_plantguard_label)
 
     Args:
         subset:
-            torch.utils.data.Subset object.
+            PlantDoc train-adapt subset.
 
     Returns:
-        List of integer labels.
+        Integer labels from the subset.
     """
     labels = []
 
     for original_index in subset.indices:
         sample = subset.dataset.samples[original_index]
-        label = sample[1]
-        labels.append(label)
+        labels.append(int(sample[1]))
 
     return labels
 
 
-def compute_subset_class_weights(subset, num_classes, device):
+def compute_subset_class_weights(
+    subset: torch.utils.data.Subset,
+    num_classes: int,
+    device: torch.device,
+) -> torch.Tensor:
     """
-    Compute inverse-frequency class weights from PlantDoc train-adapt subset.
+    Compute inverse-frequency class weights from PlantDoc train-adapt data.
 
-    Classes absent from PlantDoc train-adapt get weight 0. That is fine because
-    they do not appear as target labels during fine-tuning.
+    Classes absent from PlantDoc train-adapt receive weight 0. This is safe
+    because absent classes do not appear as target labels during fine-tuning.
 
     Args:
         subset:
             PlantDoc train-adapt subset.
         num_classes:
-            Total number of output classes in the model.
+            Total number of model output classes.
         device:
             CPU or CUDA device.
 
     Returns:
         Class-weight tensor with shape [num_classes].
     """
-    labels = torch.tensor(get_subset_labels(subset), dtype=torch.long)
+    labels = get_subset_labels(subset)
 
-    counts = torch.bincount(labels, minlength=num_classes).float()
+    if not labels:
+        raise RuntimeError("Cannot compute class weights from an empty subset.")
+
+    labels_tensor = torch.tensor(labels, dtype=torch.long)
+
+    counts = torch.bincount(labels_tensor, minlength=num_classes).float()
     present_mask = counts > 0
 
     weights = torch.zeros(num_classes, dtype=torch.float32)
@@ -223,16 +232,16 @@ def compute_subset_class_weights(subset, num_classes, device):
 
 
 def create_finetune_loss(
-    loss_name,
-    train_subset,
-    num_classes,
-    device,
-    focal_gamma,
-):
+    loss_name: str,
+    train_subset: torch.utils.data.Subset,
+    num_classes: int,
+    device: torch.device,
+    focal_gamma: float,
+) -> nn.Module:
     """
-    Create the fine-tuning loss function.
+    Create the loss function for PlantDoc fine-tuning.
 
-    The loss type follows the original checkpoint's training loss:
+    The fine-tuning loss follows the source checkpoint's original training loss:
         - cross_entropy
         - weighted_cross_entropy
         - focal_loss
@@ -243,14 +252,14 @@ def create_finetune_loss(
         train_subset:
             PlantDoc train-adapt subset.
         num_classes:
-            Total number of output classes.
+            Total number of model output classes.
         device:
             CPU or CUDA device.
         focal_gamma:
             Gamma value for focal loss.
 
     Returns:
-        PyTorch loss function.
+        PyTorch loss module.
     """
     if loss_name == "cross_entropy":
         print("Using CrossEntropyLoss.")
@@ -273,25 +282,21 @@ def create_finetune_loss(
         print(f"Using FocalLoss with gamma={focal_gamma}.")
         return FocalLoss(gamma=focal_gamma)
 
-    raise ValueError(f"Unsupported loss: {loss_name}")
+    raise ValueError(f"Unsupported fine-tuning loss: {loss_name}")
 
 
-# ---------------------------------------------------------------------
-# Freezing / unfreezing helpers
-# ---------------------------------------------------------------------
-
-def freeze_backbone(model, model_name):
+def freeze_backbone(model: nn.Module, model_name: str) -> None:
     """
-    Freeze feature extractor and train only the classifier head.
+    Freeze the feature extractor and train only the classifier head.
 
-    This is used in Stage 1 of fine-tuning. It adapts the final classifier
-    to PlantDoc without immediately changing the whole feature extractor.
+    This is Stage 1 of PlantDoc fine-tuning. It adapts the final classifier
+    before changing the full feature extractor.
 
     Args:
         model:
             PyTorch model.
         model_name:
-            Architecture name from checkpoint config.
+            Architecture name.
     """
     for parameter in model.parameters():
         parameter.requires_grad = False
@@ -309,30 +314,29 @@ def freeze_backbone(model, model_name):
     raise ValueError(f"Unsupported model for freezing: {model_name}")
 
 
-def unfreeze_model(model):
+def unfreeze_model(model: nn.Module) -> None:
     """
-    Unfreeze the full model for low-learning-rate fine-tuning.
-
-    This is used in Stage 2 after classifier-head warmup.
+    Unfreeze every parameter for full-model low-learning-rate fine-tuning.
     """
     for parameter in model.parameters():
         parameter.requires_grad = True
 
 
-# ---------------------------------------------------------------------
-# Validation / logging helpers
-# ---------------------------------------------------------------------
-
 @torch.no_grad()
-def validate_with_f1(model, val_loader, criterion, device):
+def validate_with_f1(
+    model: nn.Module,
+    val_loader: torch.utils.data.DataLoader,
+    criterion: nn.Module,
+    device: torch.device,
+) -> dict[str, float]:
     """
-    Evaluate model on PlantDoc val-adapt split.
+    Evaluate a model on the PlantDoc val-adapt split.
 
     Args:
         model:
             PyTorch model.
         val_loader:
-            DataLoader for PlantDoc validation subset.
+            PlantDoc validation DataLoader.
         criterion:
             Loss function.
         device:
@@ -344,8 +348,8 @@ def validate_with_f1(model, val_loader, criterion, device):
     model.eval()
 
     total_loss = 0.0
-    correct = 0
-    total = 0
+    correct_predictions = 0
+    total_samples = 0
 
     all_labels = []
     all_predictions = []
@@ -358,19 +362,21 @@ def validate_with_f1(model, val_loader, criterion, device):
         loss = criterion(outputs, labels)
 
         predictions = outputs.argmax(dim=1)
-
         batch_size = labels.size(0)
 
         total_loss += loss.item() * batch_size
-        correct += (predictions == labels).sum().item()
-        total += batch_size
+        correct_predictions += (predictions == labels).sum().item()
+        total_samples += batch_size
 
         all_labels.extend(labels.cpu().tolist())
         all_predictions.extend(predictions.cpu().tolist())
 
+    if total_samples == 0:
+        raise RuntimeError("PlantDoc validation loader produced zero samples.")
+
     return {
-        "val_loss": total_loss / total,
-        "val_accuracy": correct / total,
+        "val_loss": total_loss / total_samples,
+        "val_accuracy": correct_predictions / total_samples,
         "val_macro_f1": f1_score(
             all_labels,
             all_predictions,
@@ -386,7 +392,12 @@ def validate_with_f1(model, val_loader, criterion, device):
     }
 
 
-def log_epoch_metrics(train_loss, train_accuracy, val_metrics, epoch):
+def log_epoch_metrics(
+    train_loss: float,
+    train_accuracy: float,
+    val_metrics: dict[str, float],
+    epoch: int,
+) -> None:
     """
     Print and log one epoch of fine-tuning metrics.
 
@@ -417,31 +428,27 @@ def log_epoch_metrics(train_loss, train_accuracy, val_metrics, epoch):
         mlflow.log_metric(metric_name, metric_value, step=epoch)
 
 
-# ---------------------------------------------------------------------
-# Checkpoint saving
-# ---------------------------------------------------------------------
-
 def save_finetuned_checkpoint(
-    output_path,
-    model,
-    optimizer,
-    source_checkpoint,
-    source_checkpoint_path,
-    run_name,
-    model_name,
-    loss_name,
-    class_names,
-    best_metrics,
-    epoch,
-    stage,
-    finetune_config,
-):
+    output_path: Path,
+    model: nn.Module,
+    optimizer: optim.Optimizer,
+    source_checkpoint: dict,
+    source_checkpoint_path: Path,
+    run_name: str,
+    model_name: str,
+    loss_name: str,
+    class_names: list[str],
+    best_metrics: dict[str, float],
+    epoch: int,
+    stage: str,
+    finetune_config: dict,
+) -> None:
     """
     Save the best PlantDoc-adapted checkpoint.
 
     Args:
         output_path:
-            Where to save the fine-tuned checkpoint.
+            Destination checkpoint path.
         model:
             Fine-tuned PyTorch model.
         optimizer:
@@ -449,7 +456,7 @@ def save_finetuned_checkpoint(
         source_checkpoint:
             Original PlantVillage checkpoint dictionary.
         source_checkpoint_path:
-            Path to original PlantVillage checkpoint.
+            Original PlantVillage checkpoint path.
         run_name:
             Original training run name.
         model_name:
@@ -461,12 +468,14 @@ def save_finetuned_checkpoint(
         best_metrics:
             Current best validation metrics.
         epoch:
-            Fine-tuning epoch where this checkpoint was saved.
+            Fine-tuning epoch when this checkpoint was saved.
         stage:
             "head" or "full".
         finetune_config:
             PlantDoc fine-tuning config dictionary.
     """
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
     checkpoint = {
         "source_checkpoint": source_checkpoint_path.name,
         "model_state_dict": model.state_dict(),
@@ -487,33 +496,33 @@ def save_finetuned_checkpoint(
 
 
 def maybe_save_best(
-    model,
-    optimizer,
-    output_path,
-    source_checkpoint,
-    source_checkpoint_path,
-    run_name,
-    model_name,
-    loss_name,
-    class_names,
-    current_metrics,
-    best_metrics,
-    epoch,
-    stage,
-    finetune_config,
-):
+    model: nn.Module,
+    optimizer: optim.Optimizer,
+    output_path: Path,
+    source_checkpoint: dict,
+    source_checkpoint_path: Path,
+    run_name: str,
+    model_name: str,
+    loss_name: str,
+    class_names: list[str],
+    current_metrics: dict[str, float],
+    best_metrics: dict[str, float],
+    epoch: int,
+    stage: str,
+    finetune_config: dict,
+) -> tuple[dict[str, float], bool]:
     """
-    Save checkpoint if current validation macro F1 is the best so far.
+    Save a checkpoint if current validation macro F1 is the best so far.
 
     Args:
         current_metrics:
-            Metrics from the current validation epoch.
+            Current validation metrics.
         best_metrics:
             Best metrics seen so far.
 
     Returns:
         updated_best_metrics:
-            Best metrics after checking current epoch.
+            Best metrics after comparison.
         improved:
             True if a new best checkpoint was saved.
     """
@@ -545,17 +554,17 @@ def maybe_save_best(
     return current_metrics, True
 
 
-# ---------------------------------------------------------------------
-# Model loading and training stages
-# ---------------------------------------------------------------------
-
-def load_model_for_finetuning(checkpoint_path, class_names, device):
+def load_model_for_finetuning(
+    checkpoint_path: Path,
+    class_names: list[str],
+    device: torch.device,
+) -> tuple[nn.Module, dict, str, str, str]:
     """
     Load a PlantVillage-trained checkpoint for PlantDoc fine-tuning.
 
     Args:
         checkpoint_path:
-            Path to original PlantVillage checkpoint.
+            Path to the source PlantVillage checkpoint.
         class_names:
             Current class-name list in label-index order.
         device:
@@ -575,6 +584,15 @@ def load_model_for_finetuning(checkpoint_path, class_names, device):
     """
     checkpoint = load_checkpoint(checkpoint_path)
 
+    required_keys = {"model_state_dict", "class_names", "config"}
+    missing_keys = required_keys - set(checkpoint.keys())
+
+    if missing_keys:
+        raise KeyError(
+            f"Checkpoint {checkpoint_path.name} is missing keys: "
+            f"{sorted(missing_keys)}"
+        )
+
     if list(checkpoint["class_names"]) != list(class_names):
         raise ValueError(
             f"Class-name mismatch for {checkpoint_path.name}. "
@@ -590,20 +608,20 @@ def load_model_for_finetuning(checkpoint_path, class_names, device):
     )
 
     model.load_state_dict(checkpoint["model_state_dict"])
-    model = model.to(device)
+    model.to(device)
 
     return model, checkpoint, run_name, model_name, loss_name
 
 
 def create_stage_optimizer(
-    model,
-    stage_name,
-    learning_rate,
-    weight_decay,
-    optimizer_name,
-):
+    model: nn.Module,
+    stage_name: str,
+    learning_rate: float,
+    weight_decay: float,
+    optimizer_name: str,
+) -> optim.Optimizer:
     """
-    Create optimizer for one fine-tuning stage.
+    Create an optimizer for one fine-tuning stage.
 
     Args:
         model:
@@ -611,25 +629,41 @@ def create_stage_optimizer(
         stage_name:
             "head" or "full".
         learning_rate:
-            Learning rate for this stage.
+            Stage learning rate.
         weight_decay:
-            Weight decay for this stage.
+            Stage weight decay.
         optimizer_name:
             Optimizer name from config.
 
     Returns:
         PyTorch optimizer.
     """
+    if learning_rate <= 0:
+        raise ValueError(f"learning_rate must be positive. Got: {learning_rate}")
+
+    if weight_decay < 0:
+        raise ValueError(f"weight_decay must be non-negative. Got: {weight_decay}")
+
     if stage_name == "head":
-        # For head-only training, optimize only trainable parameters.
-        return optim.AdamW(
-            filter(lambda parameter: parameter.requires_grad, model.parameters()),
-            lr=learning_rate,
-            weight_decay=weight_decay,
-        )
+        parameters = filter(lambda parameter: parameter.requires_grad, model.parameters())
+
+        if optimizer_name == "adamw":
+            return optim.AdamW(
+                parameters,
+                lr=learning_rate,
+                weight_decay=weight_decay,
+            )
+
+        if optimizer_name == "adam":
+            return optim.Adam(
+                parameters,
+                lr=learning_rate,
+                weight_decay=weight_decay,
+            )
+
+        raise ValueError(f"Unsupported optimizer for head stage: {optimizer_name}")
 
     if stage_name == "full":
-        # For full fine-tuning, reuse the project-level optimizer helper.
         return create_optimizer(
             model=model,
             optimizer_name=optimizer_name,
@@ -637,31 +671,34 @@ def create_stage_optimizer(
             weight_decay=weight_decay,
         )
 
-    raise ValueError(f"Unsupported stage: {stage_name}")
+    raise ValueError(f"Unsupported fine-tuning stage: {stage_name}")
 
 
 def run_training_stage(
-    model,
-    model_name,
-    train_loader,
-    val_loader,
-    criterion,
-    stage_name,
-    epochs,
-    learning_rate,
-    weight_decay,
-    optimizer_name,
-    start_epoch,
-    best_metrics,
-    save_context,
-    device,
-):
+    model: nn.Module,
+    model_name: str,
+    train_loader: torch.utils.data.DataLoader,
+    val_loader: torch.utils.data.DataLoader,
+    criterion: nn.Module,
+    stage_name: str,
+    epochs: int,
+    learning_rate: float,
+    weight_decay: float,
+    optimizer_name: str,
+    start_epoch: int,
+    best_metrics: dict[str, float],
+    save_context: dict,
+    device: torch.device,
+) -> tuple[int, dict[str, float], int | None, str | None]:
     """
-    Run one fine-tuning stage.
+    Run one PlantDoc fine-tuning stage.
 
-    Stage options:
-        - "head": freeze backbone, train classifier head only
-        - "full": unfreeze all layers, train whole model with low LR
+    Stages:
+        head:
+            Freeze the backbone and train only the classifier head.
+
+        full:
+            Unfreeze all layers and fine-tune the full model with lower LR.
 
     Args:
         model:
@@ -685,11 +722,11 @@ def run_training_stage(
         optimizer_name:
             Optimizer name.
         start_epoch:
-            Global epoch count before this stage.
+            Global epoch number before this stage starts.
         best_metrics:
             Best validation metrics so far.
         save_context:
-            Static arguments needed by maybe_save_best.
+            Static arguments passed to maybe_save_best.
         device:
             CPU or CUDA device.
 
@@ -699,7 +736,7 @@ def run_training_stage(
         best_metrics:
             Updated best metrics.
         stage_best_epoch:
-            Epoch of best checkpoint inside this stage, or None.
+            Epoch where this stage produced a new best, or None.
         stage_best_stage:
             Stage name if this stage produced a new best, otherwise None.
     """
@@ -715,7 +752,7 @@ def run_training_stage(
         unfreeze_model(model)
 
     else:
-        raise ValueError(f"Unsupported stage: {stage_name}")
+        raise ValueError(f"Unsupported fine-tuning stage: {stage_name}")
 
     optimizer = create_stage_optimizer(
         model=model,
@@ -725,8 +762,8 @@ def run_training_stage(
         optimizer_name=optimizer_name,
     )
 
-    best_epoch_in_stage = None
-    best_stage_in_stage = None
+    stage_best_epoch = None
+    stage_best_stage = None
     current_epoch = start_epoch
 
     for _ in range(epochs):
@@ -766,31 +803,27 @@ def run_training_stage(
         )
 
         if improved:
-            best_epoch_in_stage = current_epoch
-            best_stage_in_stage = stage_name
+            stage_best_epoch = current_epoch
+            stage_best_stage = stage_name
 
-    return current_epoch, best_metrics, best_epoch_in_stage, best_stage_in_stage
+    return current_epoch, best_metrics, stage_best_epoch, stage_best_stage
 
-
-# ---------------------------------------------------------------------
-# One-checkpoint fine-tuning
-# ---------------------------------------------------------------------
 
 def finetune_checkpoint(
-    checkpoint_path,
-    class_names,
-    train_loader,
-    val_loader,
-    train_subset,
-    finetune_config,
-    device,
-):
+    checkpoint_path: Path,
+    class_names: list[str],
+    train_loader: torch.utils.data.DataLoader,
+    val_loader: torch.utils.data.DataLoader,
+    train_subset: torch.utils.data.Subset,
+    finetune_config: dict,
+    device: torch.device,
+) -> dict:
     """
-    Fine-tune one checkpoint on PlantDoc.
+    Fine-tune one PlantVillage checkpoint on PlantDoc.
 
     Args:
         checkpoint_path:
-            Path to original PlantVillage best checkpoint.
+            Source PlantVillage best checkpoint.
         class_names:
             Class names in label-index order.
         train_loader:
@@ -805,7 +838,7 @@ def finetune_checkpoint(
             CPU or CUDA device.
 
     Returns:
-        Summary dictionary for this checkpoint.
+        Summary row for plantdoc_finetuning_summary.csv.
     """
     model, checkpoint, run_name, model_name, loss_name = load_model_for_finetuning(
         checkpoint_path=checkpoint_path,
@@ -856,6 +889,9 @@ def finetune_checkpoint(
         "finetune_config": finetune_config,
     }
 
+    best_epoch = None
+    best_stage = None
+
     with mlflow.start_run(run_name=f"{run_name}_plantdoc_finetune"):
         mlflow.log_param("source_checkpoint", checkpoint_path.name)
         mlflow.log_param("model_name", model_name)
@@ -868,8 +904,6 @@ def finetune_checkpoint(
             mlflow.log_param(f"plantdoc_finetune.{key}", str(value))
 
         epoch = 0
-        best_epoch = None
-        best_stage = None
 
         epoch, best_metrics, stage_best_epoch, stage_best_stage = run_training_stage(
             model=model,
@@ -878,9 +912,9 @@ def finetune_checkpoint(
             val_loader=val_loader,
             criterion=criterion,
             stage_name="head",
-            epochs=finetune_config["head_epochs"],
-            learning_rate=finetune_config["lr_head"],
-            weight_decay=finetune_config["weight_decay"],
+            epochs=int(finetune_config["head_epochs"]),
+            learning_rate=float(finetune_config["lr_head"]),
+            weight_decay=float(finetune_config["weight_decay"]),
             optimizer_name=finetune_config["optimizer"],
             start_epoch=epoch,
             best_metrics=best_metrics,
@@ -899,9 +933,9 @@ def finetune_checkpoint(
             val_loader=val_loader,
             criterion=criterion,
             stage_name="full",
-            epochs=finetune_config["full_epochs"],
-            learning_rate=finetune_config["lr_full"],
-            weight_decay=finetune_config["weight_decay"],
+            epochs=int(finetune_config["full_epochs"]),
+            learning_rate=float(finetune_config["lr_full"]),
+            weight_decay=float(finetune_config["weight_decay"]),
             optimizer_name=finetune_config["optimizer"],
             start_epoch=epoch,
             best_metrics=best_metrics,
@@ -918,7 +952,13 @@ def finetune_checkpoint(
         mlflow.log_param("best_epoch", best_epoch)
         mlflow.log_param("best_stage", best_stage)
 
-    return {
+        if output_path.exists():
+            mlflow.log_artifact(
+                str(output_path),
+                artifact_path="checkpoints",
+            )
+
+    summary_row = {
         "source_checkpoint": checkpoint_path.name,
         "run_name": run_name,
         "model_name": model_name,
@@ -930,22 +970,27 @@ def finetune_checkpoint(
         "finetuned_checkpoint": str(output_path.relative_to(PROJECT_ROOT)),
     }
 
+    del model
+    gc.collect()
 
-# ---------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------
+    if device.type == "cuda":
+        torch.cuda.empty_cache()
 
-def main():
+    return summary_row
+
+
+def main() -> None:
     """
-    Run PlantDoc fine-tuning for one checkpoint or all checkpoints.
+    Run PlantDoc fine-tuning for one checkpoint or all source checkpoints.
 
-    Configuration comes from:
-        training/config.yaml -> plantdoc_finetuning section
+    Configuration is read from:
+
+        training/config.yaml -> plantdoc_finetuning
     """
     config = load_config(CONFIG_PATH)
     finetune_config = config["plantdoc_finetuning"]
 
-    set_seed(config["project"]["seed"])
+    set_seed(int(config["project"]["seed"]))
 
     device = get_device(config["training"]["device"])
     print(f"Using device: {device}")
@@ -956,7 +1001,7 @@ def main():
     mlflow.set_tracking_uri(f"sqlite:///{MLFLOW_DB_PATH.as_posix()}")
     mlflow.set_experiment(finetune_config["experiment_name"])
 
-    checkpoint_paths = discover_checkpoints(finetune_config["checkpoint"])
+    checkpoint_paths = discover_checkpoints(finetune_config.get("checkpoint"))
 
     if not checkpoint_paths:
         raise FileNotFoundError("No checkpoints found for PlantDoc fine-tuning.")
@@ -966,7 +1011,7 @@ def main():
         print(f"- {checkpoint_path.name}")
 
     first_checkpoint = load_checkpoint(checkpoint_paths[0])
-    class_names = first_checkpoint["class_names"]
+    class_names = list(first_checkpoint["class_names"])
 
     (
         train_loader,
@@ -977,10 +1022,10 @@ def main():
         test_dataset,
     ) = get_plantdoc_finetune_loaders(
         class_names=class_names,
-        batch_size=finetune_config["batch_size"],
-        num_workers=finetune_config["num_workers"],
-        val_ratio=finetune_config["val_ratio"],
-        seed=config["project"]["seed"],
+        batch_size=int(finetune_config["batch_size"]),
+        num_workers=int(finetune_config["num_workers"]),
+        val_ratio=float(finetune_config["val_ratio"]),
+        seed=int(config["project"]["seed"]),
     )
 
     print("\nPlantDoc fine-tuning data:")
@@ -1003,9 +1048,6 @@ def main():
             )
         )
 
-        if device.type == "cuda":
-            torch.cuda.empty_cache()
-
     summary_df = pd.DataFrame(rows).sort_values(
         by="best_val_macro_f1",
         ascending=False,
@@ -1013,6 +1055,11 @@ def main():
 
     summary_path = output_dir / "plantdoc_finetuning_summary.csv"
     summary_df.to_csv(summary_path, index=False)
+
+    mlflow.log_artifact(
+        str(summary_path),
+        artifact_path="plantdoc_finetuning_summary",
+    )
 
     print("\nPlantDoc fine-tuning complete.")
     print(f"Summary saved to: {summary_path}")
