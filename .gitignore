@@ -1,34 +1,90 @@
-# Data folders
-data/raw/
-data/train/
-data/val/
-data/test/
+# ---------------------------------------------------------------------
+# PlantGuard generated datasets
+# ---------------------------------------------------------------------
+/data/raw/
+/data/train/
+/data/val/
+/data/test/
 
-# Model files
-models/
-model/
+# Keep these tracked:
+# /data/metadata/
+# /data/splits/
+
+# ---------------------------------------------------------------------
+# Model checkpoints and exported models
+# ---------------------------------------------------------------------
+/models/
+/model/
 *.pth
 *.pt
+*.ckpt
 *.onnx
-evaluation_results/
+*.engine
+*.trt
 
-# Python cache
+# ---------------------------------------------------------------------
+# Evaluation and explainability outputs
+# ---------------------------------------------------------------------
+/evaluation_results/
+/explain/results/
+
+# ---------------------------------------------------------------------
+# MLflow
+# ---------------------------------------------------------------------
+/mlruns/
+/mlartifacts/
+mlflow.db
+*.sqlite
+*.sqlite3
+*.db
+
+# ---------------------------------------------------------------------
+# Python cache and build files
+# ---------------------------------------------------------------------
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
 
-# Environment / secrets
+# ---------------------------------------------------------------------
+# Virtual environments
+# ---------------------------------------------------------------------
+.venv/
+venv/
+env/
+ENV/
+
+# ---------------------------------------------------------------------
+# Environment files and secrets
+# ---------------------------------------------------------------------
 .env
+.env.*
 kaggle.json
 access_token
+*.pem
+*.key
 
-# Notebooks checkpoints
+# ---------------------------------------------------------------------
+# Jupyter
+# ---------------------------------------------------------------------
 .ipynb_checkpoints/
 
+# ---------------------------------------------------------------------
+# IDE/editor files
+# ---------------------------------------------------------------------
+.vscode/
+.idea/
+
+# ---------------------------------------------------------------------
 # OS files
+# ---------------------------------------------------------------------
 .DS_Store
 Thumbs.db
-
-# MLflow experiment logs
-mlruns/
-mlartifacts/
-mlflow.db
+desktop.ini
