@@ -551,8 +551,6 @@ plantguard/
 │   └── to_onnx.py
 ├── explain/
 │   └── gradcam.py
-├── notebooks/
-│   └── class_imbalance.ipynb
 ├── training/
 │   ├── train.py
 │   ├── finetune_plantdoc.py
