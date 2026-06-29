@@ -1,65 +1,62 @@
 # PlantGuard
 
-**PlantGuard** is a production-oriented plant disease classification system built with PyTorch. The project goes beyond clean benchmark accuracy by training, adapting, evaluating, and explaining deep learning models across multiple real-world crop disease datasets.
+**PlantGuard** is a production-oriented plant disease classification system built with PyTorch, ONNX Runtime, FastAPI, and Docker.
 
-The final model selection is based on a combination of quantitative robustness metrics and qualitative Grad-CAM explainability audits.
+The project trains, adapts, evaluates, explains, exports, and serves a deep learning model across multiple crop disease datasets. It is designed to go beyond clean benchmark accuracy by testing real-world robustness, domain shift, class expansion, and explanation quality.
 
-## Final Model Recommendation
+The final system includes:
+
+* PlantVillage base training
+* PlantDoc domain adaptation
+* PlantWild_v2 expanded 132-class training
+* FieldPlant external evaluation
+* MLflow experiment tracking
+* Grad-CAM model auditing
+* ONNX export and verification
+* FastAPI image-upload inference API
+* Dockerized API deployment
+
+## Final Model
+
+The selected final model is:
 
 ```text
 resnet50_cross_entropy_plantdoc_finetuned_plantwild_expanded
 ```
 
-The final recommended model is:
+Architecture and training objective:
 
 ```text
 ResNet50 + Cross Entropy
 ```
 
-This model was selected because it achieved the best overall balance of:
+This model was selected because it achieved the strongest overall balance of quantitative robustness and qualitative explanation quality.
 
-* highest combined final test score
-* strongest hard-set macro F1
-* best FieldPlant macro F1
-* best PlantDoc macro F1
-* more trustworthy Grad-CAM focus
-* better class-specific behavior on incorrect predictions
+It had:
 
-While EfficientNet-B3 Focal Loss achieved the best PlantWild_v2 macro F1, its Grad-CAMs were often too broad and less class-discriminative. ResNet50 Cross Entropy produced more compact and disease-focused heatmaps, making it the stronger final choice for reliability-focused deployment and research presentation.
+* the highest combined final test score
+* the strongest hard-set mean macro F1
+* the best FieldPlant macro F1
+* the best PlantDoc macro F1
+* strong PlantWild_v2 performance
+* the most trustworthy Grad-CAM focus
+* better class-specific Grad-CAM behavior on incorrect predictions
 
-## Project Summary
+EfficientNet-B3 Focal Loss achieved the best PlantWild_v2 macro F1, but its Grad-CAMs were often broad and less class-discriminative. ResNet50 Cross Entropy produced more compact, disease-focused heatmaps, making it the stronger final choice for a reliability-focused plant disease recognition system.
 
-PlantGuard is an end-to-end computer vision pipeline for plant disease recognition.
+## Project Motivation
 
-It includes:
+Many crop disease classifiers perform extremely well on clean benchmark datasets such as PlantVillage but fail on real-world images because of domain shift.
 
-* dataset download and preparation scripts
-* custom PyTorch datasets and dataloaders
-* PlantVillage base training
-* PlantDoc domain adaptation
-* PlantWild_v2 expanded-label training
-* FieldPlant external evaluation preparation
-* MLflow experiment tracking
-* final multi-dataset evaluation
-* Grad-CAM explainability
-* production-oriented code structure
-* planned ONNX, FastAPI, and Docker deployment
-
-The main objective is to build a crop disease classifier that is not only accurate on clean benchmark images, but also evaluated honestly on harder real-world datasets.
-
-## Why This Project Matters
-
-Many crop disease classifiers achieve very high accuracy on clean datasets such as PlantVillage, but fail to generalize to real-world images because of domain shift.
-
-PlantGuard explicitly tests this problem by evaluating across:
+PlantGuard directly investigates this problem by evaluating across:
 
 * clean lab-style images
-* field-style images
 * real-world mobile/camera images
+* field-style images
 * expanded disease categories
 * external datasets with different image distributions
 
-The project is designed around the principle that a useful machine learning model must be evaluated on realistic failure cases, not only on clean benchmark splits.
+The goal is not only to build a classifier, but to build a realistic machine learning system that is evaluated honestly before deployment.
 
 ## Current Status
 
@@ -70,31 +67,35 @@ Implemented:
 * PlantWild_v2 expanded label-space preparation
 * FieldPlant external test-set conversion
 * dataset-specific normalization
-* custom PyTorch dataset and dataloader utilities
+* custom PyTorch datasets and dataloaders
 * EfficientNet-B0, EfficientNet-B3, and ResNet50 training
 * Cross Entropy, Weighted Cross Entropy, and Focal Loss comparison
 * PlantDoc fine-tuning
 * PlantWild_v2 132-class expanded training with replay
-* final evaluation across four datasets
-* per-class metrics, confusion matrices, prediction CSVs, and top-confusion reports
+* final evaluation across PlantVillage, PlantDoc, PlantWild_v2, and FieldPlant
+* per-class precision, recall, F1-score, confusion matrices, and top-confusion reports
 * MLflow experiment tracking
-* Grad-CAM explainability generation
-* visual Grad-CAM model audit
+* Grad-CAM explainability and visual model audit
+* ONNX export for the selected model
+* PyTorch vs ONNX Runtime numerical verification
+* FastAPI inference API with image upload
+* Dockerized inference service
 
-Planned next:
+Not committed to Git:
 
-* ONNX export
-* PyTorch vs ONNX Runtime verification
-* FastAPI inference API
-* Docker packaging
-* selected Grad-CAM examples added to README
-* final deployment-oriented project polish
+* raw datasets
+* train/validation/test image folders
+* model checkpoints
+* ONNX model artifacts
+* MLflow runs
+* evaluation outputs
+* Grad-CAM generated images
 
 ## Pipeline Overview
 
-PlantGuard is organized into four major stages.
+PlantGuard is organized into five major parts.
 
-### Stage A: PlantVillage Base Training
+### 1. PlantVillage Base Training
 
 The first stage trains 38-class models on PlantVillage.
 
@@ -110,9 +111,9 @@ Loss functions compared:
 * Weighted CrossEntropyLoss
 * Focal Loss
 
-This creates a 3 × 3 experiment matrix across architecture choice and class-imbalance strategy.
+This creates a 3 × 3 experiment matrix across model architecture and class-imbalance strategy.
 
-### Stage B: PlantDoc Domain Adaptation
+### 2. PlantDoc Domain Adaptation
 
 PlantDoc is used for real-world domain adaptation.
 
@@ -122,7 +123,7 @@ Each PlantVillage-trained checkpoint is fine-tuned on PlantDoc train-adapt data 
 
 The best PlantDoc-adapted checkpoint is selected using validation macro F1.
 
-### Stage C: PlantWild_v2 Expanded Training
+### 3. PlantWild_v2 Expanded Training
 
 PlantWild_v2 expands PlantGuard from the original 38 PlantVillage labels to a 132-class label space.
 
@@ -141,13 +142,13 @@ Expanded training uses replay to reduce catastrophic forgetting:
 8% PlantVillage replay
 ```
 
-The model classifier head is expanded from 38 classes to 132 classes:
+The classifier head is expanded from 38 classes to 132 classes:
 
 * compatible backbone weights are copied
 * classifier rows 0-37 are copied from the PlantDoc-fine-tuned checkpoint
 * classifier rows 38-131 are randomly initialized
 
-Model selection during PlantWild training uses:
+Model selection during expanded training uses:
 
 ```text
 selection_score =
@@ -156,7 +157,7 @@ selection_score =
 + 0.08 * PlantVillage validation macro F1
 ```
 
-### Stage D: Final Evaluation and Grad-CAM Audit
+### 4. Final Evaluation and Grad-CAM Audit
 
 Final expanded checkpoints are evaluated on:
 
@@ -175,7 +176,32 @@ final_test_score =
 + 0.10 * PlantVillage test macro F1
 ```
 
-After final evaluation, Grad-CAM visualizations are generated from each model’s saved prediction CSVs. The final recommendation is based on both numerical performance and visual explanation quality.
+Grad-CAM visualizations are then generated from saved prediction CSVs to inspect whether models focus on diseased plant regions or irrelevant shortcuts such as backgrounds, borders, full leaf silhouettes, or image artifacts.
+
+### 5. ONNX, FastAPI, and Docker Inference
+
+The selected ResNet50 Cross Entropy checkpoint is exported to ONNX.
+
+The export utility:
+
+* loads the selected PyTorch checkpoint
+* rebuilds the matching model architecture
+* exports the model to ONNX
+* validates the ONNX graph
+* verifies ONNX Runtime output against PyTorch output
+* saves inference metadata as JSON
+
+The FastAPI service:
+
+* loads the ONNX model and metadata at startup
+* accepts image uploads
+* decodes images with Pillow
+* resizes and normalizes images using saved metadata
+* runs ONNX Runtime inference
+* applies softmax
+* returns top-k predictions as JSON
+
+The Docker image packages the API, runtime dependencies, ONNX model, and metadata into a portable inference container.
 
 ## Datasets
 
@@ -191,20 +217,20 @@ data/val/
 data/test/
 ```
 
-PlantVillage is clean and lab-style, so it is useful for base training but not sufficient for real-world robustness evaluation.
+PlantVillage is clean and lab-style. It is useful for base training, but it is not sufficient for real-world robustness evaluation.
 
 ### PlantDoc
 
 PlantDoc is used as an external real-world dataset.
 
-It is mapped into the PlantGuard label space using a manually reviewed mapping. It is used for:
+It is mapped into the PlantGuard label space using manually reviewed label mappings. It is used for:
 
 * zero-shot external evaluation
 * PlantDoc fine-tuning
-* PlantDoc replay during PlantWild-expanded training
+* PlantDoc replay during PlantWild_v2 expanded training
 * held-out external testing
 
-Initial zero-shot evaluation showed a large performance drop compared to PlantVillage, confirming a strong domain shift.
+Initial zero-shot evaluation showed a large performance drop compared to PlantVillage, confirming strong domain shift.
 
 ### PlantWild_v2
 
@@ -250,7 +276,7 @@ FieldPlant is one of the hardest evaluation sets and is especially important for
 
 ## Final Model Ranking
 
-PlantVillage performance is not useful for choosing the final model because almost all models reach very high macro F1 on PlantVillage.
+PlantVillage performance is not useful for selecting the final model because almost all models reach very high macro F1 on PlantVillage.
 
 The real separation comes from:
 
@@ -325,6 +351,144 @@ In wrong predictions, the predicted-class and true-class Grad-CAMs for Efficient
 
 This visual audit was a major reason ResNet50 Cross Entropy was selected as the final model.
 
+## API Inference
+
+The FastAPI inference service is implemented in:
+
+```text
+api/main.py
+```
+
+Available endpoints:
+
+| Endpoint   | Method | Description                                   |
+| ---------- | ------ | --------------------------------------------- |
+| `/`        | GET    | Basic service information                     |
+| `/health`  | GET    | API and model-loading status                  |
+| `/model`   | GET    | Model metadata and inference contract         |
+| `/predict` | POST   | Upload an image and receive top-k predictions |
+| `/docs`    | GET    | Interactive Swagger UI                        |
+
+Run locally:
+
+```powershell
+python api\main.py
+```
+
+Or with Uvicorn:
+
+```powershell
+uvicorn api.main:app --host 127.0.0.1 --port 8000 --reload
+```
+
+Open the interactive API docs:
+
+```text
+http://127.0.0.1:8000/docs
+```
+
+Example prediction request:
+
+```powershell
+curl.exe -X POST "http://127.0.0.1:8000/predict?top_k=5" `
+  -F "file=@data\test\Apple___Apple_scab\0340dc35-5215-48ab-8db7-06af99fcb358___FREC_Scab 2966.JPG"
+```
+
+Example successful prediction:
+
+```json
+{
+  "filename": "0340dc35-5215-48ab-8db7-06af99fcb358___FREC_Scab 2966.JPG",
+  "model": "resnet50_cross_entropy_plantdoc_finetuned_plantwild_expanded",
+  "top_k": 5,
+  "predictions": [
+    {
+      "rank": 1,
+      "class_index": 0,
+      "class_name": "Apple___Apple_scab",
+      "confidence": 0.999994158744812
+    }
+  ]
+}
+```
+
+## Dockerized API
+
+The inference API can be built and run as a Docker container.
+
+Docker files:
+
+```text
+api/Dockerfile
+.dockerignore
+requirements-api.txt
+```
+
+Build the image from the repository root:
+
+```powershell
+docker build -f api\Dockerfile -t plantguard-api .
+```
+
+Run the container:
+
+```powershell
+docker run --rm -p 8000:8000 plantguard-api
+```
+
+Then test:
+
+```powershell
+curl.exe http://127.0.0.1:8000/health
+curl.exe http://127.0.0.1:8000/model
+```
+
+Prediction test:
+
+```powershell
+curl.exe -X POST "http://127.0.0.1:8000/predict?top_k=5" `
+  -F "file=@data\test\Apple___Apple_scab\0340dc35-5215-48ab-8db7-06af99fcb358___FREC_Scab 2966.JPG"
+```
+
+The ONNX model and metadata are copied into the Docker image from:
+
+```text
+models/onnx/
+```
+
+These generated model artifacts are intentionally not committed to Git.
+
+## ONNX Export
+
+The selected model is exported using:
+
+```text
+export/to_onnx.py
+```
+
+Run:
+
+```powershell
+python export\to_onnx.py
+```
+
+Generated local artifacts:
+
+```text
+models/onnx/plantguard_resnet50_cross_entropy.onnx
+models/onnx/plantguard_resnet50_cross_entropy_metadata.json
+```
+
+The export script verifies ONNX Runtime against PyTorch before saving metadata. A successful export prints:
+
+```text
+ONNX graph validation passed
+ONNX Runtime verification passed
+Export completed successfully
+```
+
+Generated ONNX files are not committed to Git.
+
 ## Evaluation Outputs
 
 The evaluation pipeline saves:
@@ -369,32 +533,35 @@ The Grad-CAM audit included contact sheets for:
 * PlantWild_v2
 * PlantVillage
 
-Generated Grad-CAM images are not committed by default. Selected representative examples can be copied into `docs/assets/gradcam/` for README display.
+Generated Grad-CAM images are not committed by default. Selected representative examples can later be copied into `docs/assets/gradcam/` for README display.
 
 ## Repository Structure
 
 ```text
 plantguard/
+├── api/
+│   ├── main.py
+│   └── Dockerfile
 ├── data/
 │   ├── download.py
 │   ├── dataset.py
 │   ├── prepare_plantwild.py
 │   └── prepare_fieldplant.py
+├── export/
+│   └── to_onnx.py
+├── explain/
+│   └── gradcam.py
+├── notebooks/
+│   └── class_imbalance.ipynb
 ├── training/
 │   ├── train.py
 │   ├── finetune_plantdoc.py
 │   ├── train_plantwild.py
 │   ├── evaluate.py
 │   └── config.yaml
-├── explain/
-│   └── gradcam.py
-├── export/
-│   └── to_onnx.py
-├── api/
-│   ├── main.py
-│   └── Dockerfile
-├── notebooks/
-│   └── class_imbalance.ipynb
+├── .dockerignore
+├── .gitignore
+├── requirements-api.txt
 └── README.md
 ```
 
@@ -450,6 +617,30 @@ Run final evaluation:
 python training\evaluate.py
 ```
 
+Export ONNX:
+
+```powershell
+python export\to_onnx.py
+```
+
+Run FastAPI locally:
+
+```powershell
+python api\main.py
+```
+
+Build Docker image:
+
+```powershell
+docker build -f api\Dockerfile -t plantguard-api .
+```
+
+Run Docker container:
+
+```powershell
+docker run --rm -p 8000:8000 plantguard-api
+```
+
 Generate Grad-CAM explanations:
 
 ```powershell
@@ -469,12 +660,16 @@ mlflow ui --backend-store-uri sqlite:///mlflow.db --host 127.0.0.1 --port 5000
 * torchvision
 * scikit-learn
 * pandas
+* NumPy
+* Pillow
 * matplotlib
 * MLflow
 * YAML configs
 * Grad-CAM
+* ONNX
 * ONNX Runtime
 * FastAPI
+* Uvicorn
 * Docker
 
 ## What Is Not Committed
@@ -498,21 +693,25 @@ mlflow.db
 __pycache__/
 ```
 
+The repository commits code, metadata, mappings, split manifests, and deployment configuration. Large model artifacts and generated outputs are kept local.
+
 ## Engineering Highlights
 
 PlantGuard demonstrates:
 
 * end-to-end ML project structure
 * reproducible experiment tracking with MLflow
-* config-driven training
+* config-driven PyTorch training
 * dataset-specific preprocessing
 * class imbalance handling
 * domain adaptation
 * expanded label-space training
 * external robustness evaluation
 * explainability-based model auditing
-* honest reporting of domain shift
-* deployment-oriented project planning
+* ONNX export and runtime verification
+* FastAPI inference serving
+* Dockerized API packaging
+* honest reporting of domain shift and deployment constraints
 
 ## Research and Evaluation Highlights
 
@@ -524,26 +723,14 @@ Important findings:
 2. External datasets reveal large robustness differences.
 3. FieldPlant and PlantDoc are more useful for final model selection than PlantVillage.
 4. Grad-CAM quality can change the final model choice.
-5. A model with slightly lower PlantWild macro F1 can still be a better final model if it is more robust and more explainable.
+5. A model with slightly lower PlantWild_v2 macro F1 can still be a better final model if it is more robust and more explainable.
 6. ResNet50 Cross Entropy produced the best combined result across metrics and explanation quality.
-
-## Next Steps
-
-Remaining production steps:
-
-1. Export the selected ResNet50 Cross Entropy model to ONNX.
-2. Save class-name metadata alongside the exported model.
-3. Compare PyTorch and ONNX Runtime predictions on the same images.
-4. Build a FastAPI inference API.
-5. Add `/health` and `/predict` endpoints.
-6. Return top-k predictions and confidence scores.
-7. Add Docker support.
-8. Add selected Grad-CAM examples to the README.
-9. Prepare final GitHub polish for PlantGuard v1.0.
+7. ONNX Runtime inference was verified against PyTorch before API integration.
+8. The API can serve predictions locally and inside Docker.
 
 ## Project Direction
 
-PlantGuard is being developed as a production-oriented and research-minded computer vision project.
+PlantGuard is a production-oriented and research-minded computer vision project.
 
 The focus is not simply high benchmark accuracy. The focus is building a realistic ML system that includes:
 
@@ -554,6 +741,8 @@ The focus is not simply high benchmark accuracy. The focus is building a realist
 * expanded label-space learning
 * explainability
 * failure-case analysis
-* deployment preparation
+* ONNX export
+* API serving
+* containerized deployment preparation
 
 The central lesson is that clean-dataset accuracy alone is not enough. A useful crop disease model must be evaluated against real-world images, external datasets, and visual explanation quality before deployment.
