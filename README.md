@@ -16,6 +16,163 @@ The final system includes:
 * FastAPI image-upload inference API
 * Dockerized API deployment
 
+## Quickstart
+
+This quickstart runs the final PlantGuard inference API locally.
+
+PlantGuard’s source code, dataset-preparation scripts, training pipeline, evaluation pipeline, ONNX export utility, FastAPI API, and Docker configuration are included in this repository.
+
+Large generated artifacts are intentionally not committed to Git, including:
+
+```text
+models/
+*.pth
+*.pt
+*.onnx
+data/raw/
+data/train/
+data/val/
+data/test/
+evaluation_results/
+explain/results/
+mlruns/
+mlartifacts/
+```
+
+To run inference, the exported ONNX model and metadata must exist locally under:
+
+```text
+models/onnx/
+├── plantguard_resnet50_cross_entropy.onnx
+└── plantguard_resnet50_cross_entropy_metadata.json
+```
+
+### 1. Clone the repository
+
+```powershell
+git clone https://github.com/tr3npa1/plantguard.git
+cd plantguard
+```
+
+### 2. Create and activate a Python environment
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\activate
+```
+
+Install the API dependencies:
+
+```powershell
+pip install -r requirements-api.txt
+```
+
+### 3. Prepare ONNX inference artifacts
+
+If the ONNX model and metadata already exist locally, confirm them with:
+
+```powershell
+Test-Path .\models\onnx\plantguard_resnet50_cross_entropy.onnx
+Test-Path .\models\onnx\plantguard_resnet50_cross_entropy_metadata.json
+```
+
+Both commands should return:
+
+```text
+True
+```
+
+If the ONNX artifacts are missing, export the selected model after placing the trained checkpoint in the expected local model directory:
+
+```powershell
+python export\to_onnx.py
+```
+
+A successful export prints:
+
+```text
+ONNX graph validation passed
+ONNX Runtime verification passed
+Export completed successfully
+```
+
+### 4. Run the FastAPI inference server
+
+```powershell
+python api\main.py
+```
+
+Or run with Uvicorn directly:
+
+```powershell
+uvicorn api.main:app --host 127.0.0.1 --port 8000 --reload
+```
+
+Open the interactive API docs:
+
+```text
+http://127.0.0.1:8000/docs
+```
+
+### 5. Test the API
+
+Health check:
+
+```powershell
+curl.exe http://127.0.0.1:8000/health
+```
+
+Model metadata:
+
+```powershell
+curl.exe http://127.0.0.1:8000/model
+```
+
+Prediction request:
+
+```powershell
+curl.exe -X POST "http://127.0.0.1:8000/predict?top_k=5" `
+  -F "file=@data\test\Apple___Apple_scab\0340dc35-5215-48ab-8db7-06af99fcb358___FREC_Scab 2966.JPG"
+```
+
+The API returns top-k class predictions and confidence scores as JSON.
+
+### 6. Run with Docker
+
+Build the Docker image from the repository root:
+
+```powershell
+docker build -f api\Dockerfile -t plantguard-api .
+```
+
+Run the container:
+
+```powershell
+docker run --rm -p 8000:8000 plantguard-api
+```
+
+Then open:
+
+```text
+http://127.0.0.1:8000/docs
+```
+
+or test from another terminal:
+
+```powershell
+curl.exe http://127.0.0.1:8000/health
+curl.exe http://127.0.0.1:8000/model
+```
+
+The Docker image copies the local ONNX model and metadata from:
+
+```text
+models/onnx/
+```
+
+So those files must exist before building the image.
+
+
 ## Final Model
 
 The selected final model is:
@@ -693,23 +850,6 @@ __pycache__/
 
 The repository commits code, metadata, mappings, split manifests, and deployment configuration. Large model artifacts and generated outputs are kept local.
 
-## Engineering Highlights
-
-PlantGuard demonstrates:
-
-* end-to-end ML project structure
-* reproducible experiment tracking with MLflow
-* config-driven PyTorch training
-* dataset-specific preprocessing
-* class imbalance handling
-* domain adaptation
-* expanded label-space training
-* external robustness evaluation
-* explainability-based model auditing
-* ONNX export and runtime verification
-* FastAPI inference serving
-* Dockerized API packaging
-* honest reporting of domain shift and deployment constraints
 
 ## Research and Evaluation Highlights
 
